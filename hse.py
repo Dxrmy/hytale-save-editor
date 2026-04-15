@@ -1,12 +1,23 @@
 import os
 import json
 import shutil
+import struct
 from datetime import datetime
 from pathlib import Path
 from typing import Final, List, Optional, Any
 from InquirerPy import inquirer
 from rich.console import Console
 from rich.table import Table
+
+try:
+    import zstandard as zstd
+except ImportError:
+    zstd = None
+
+try:
+    import bson
+except ImportError:
+    bson = None
 
 
 # Global console instance for rich output
@@ -391,24 +402,48 @@ def edit_recipes(player_path: Path) -> None:
     while True:
         selection = select_with_numbers(
             f"Recipe Unlocker ({len(recipes)} Unlocked)",
-            ["Unlock All (Sample Pack)", "Add Specific Recipe ID", "Clear All Recipes", "Back"]
+            ["Unlock All (Comprehensive Pack)", "Add Specific Recipe ID", "Clear All Recipes", "Back"]
         )
 
         if selection == "Back":
             break
 
         if selection.startswith("Unlock All"):
-            sample_recipes = [
+            comprehensive_recipes = [
                 "hytale:crafting_table", "hytale:wooden_sword", "hytale:wooden_pickaxe",
                 "hytale:stone_sword", "hytale:stone_pickaxe", "hytale:iron_sword",
                 "hytale:iron_pickaxe", "hytale:gold_sword", "hytale:gold_pickaxe",
                 "hytale:diamond_sword", "hytale:diamond_pickaxe", "hytale:torch",
-                "hytale:furnace", "hytale:chest", "hytale:bed"
+                "hytale:furnace", "hytale:chest", "hytale:bed",
+                # Chests provided by user
+                "Furniture_Ancient_Chest_Large", "Furniture_Ancient_Chest_Small",
+                "Furniture_Christmas_Chest_Small", "Furniture_Christmas_Chest_Small_Green",
+                "Furniture_Christmas_Chest_Small_Red", "Furniture_Christmas_Chest_Small_RedDotted",
+                "Furniture_Christmas_Chest_Small_White", "Furniture_Crude_Chest_Large",
+                "Furniture_Crude_Chest_Small", "Furniture_Desert_Chest_Large",
+                "Furniture_Desert_Chest_Small", "Furniture_Dungeon_Chest_Epic",
+                "Furniture_Dungeon_Chest_Epic_Large", "Furniture_Dungeon_Chest_Legendary_Large",
+                "Furniture_Feran_Chest_Large", "Furniture_Feran_Chest_Small",
+                "Furniture_Frozen_Castle_Chest_Large", "Furniture_Frozen_Castle_Chest_Small",
+                "Furniture_Goblin_Chest_Small", "Furniture_Human_Ruins_Chest_Large",
+                "Furniture_Human_Ruins_Chest_Small", "Furniture_Jungle_Chest_Large",
+                "Furniture_Jungle_Chest_Small", "Furniture_Kweebec_Chest_Large",
+                "Furniture_Kweebec_Chest_Small", "Furniture_Lumberjack_Chest_Large",
+                "Furniture_Lumberjack_Chest_Small", "Furniture_Royal_Magic_Chest_Large",
+                "Furniture_Royal_Magic_Chest_Small", "Furniture_Scarak_Hive_Chest_Large",
+                "Furniture_Scarak_Hive_Chest_Small", "Furniture_Tavern_Chest_Large",
+                "Furniture_Tavern_Chest_Small", "Furniture_Temple_Dark_Chest_Large",
+                "Furniture_Temple_Dark_Chest_Small", "Furniture_Temple_Emerald_Chest_Large",
+                "Furniture_Temple_Emerald_Chest_Small", "Furniture_Temple_Light_Chest_Large",
+                "Furniture_Temple_Light_Chest_Small", "Furniture_Temple_Scarak_Chest_Large",
+                "Furniture_Temple_Scarak_Chest_Small", "Furniture_Temple_Wind_Chest_Large",
+                "Furniture_Temple_Wind_Chest_Small", "Furniture_Village_Chest_Large",
+                "Furniture_Village_Chest_Small"
             ]
             # Merge and de-duplicate
-            recipes = list(set(recipes + sample_recipes))
+            recipes = list(set(recipes + comprehensive_recipes))
             set_nested(data, recipes_path, recipes)
-            print(f"Unlocked {len(sample_recipes)} sample recipes.")
+            print(f"Unlocked {len(comprehensive_recipes)} comprehensive recipes.")
         
         elif selection.startswith("Add Specific"):
             recipe_id = inquirer.text(message="Enter Recipe ID to add (e.g. hytale:iron_sword):").execute()
@@ -439,7 +474,9 @@ def edit_skills(player_path: Path) -> None:
     potential_paths = [
         ["Components", "Progression"],
         ["Components", "Skills"],
-        ["Components", "Player", "PlayerData", "Progression"]
+        ["Components", "Player", "PlayerData", "Progression"],
+        ["Components", "EndgamePlayerData"],
+        ["Components", "Player", "PlayerData"]
     ]
     
     skills_path = None
@@ -567,12 +604,17 @@ def waypoint_teleport(player_path: Path, save_path: Path) -> None:
         print(f"Error loading files: {e}")
         return
 
-    markers = marker_data.get("Markers", [])
+    markers_raw = marker_data.get("Markers", [])
+    if isinstance(markers_raw, dict):
+        markers = list(markers_raw.values())
+    else:
+        markers = markers_raw
+
     if not markers:
         print("No markers found in BlockMapMarkers.json.")
         return
 
-    marker_names = [m.get("Name", "Unnamed") for m in markers]
+    marker_names = [m.get("Name", "Unnamed") if isinstance(m, dict) else str(m) for m in markers]
     selection = select_with_numbers("Select Waypoint to Teleport:", marker_names + ["Back"])
     
     if selection == "Back":
@@ -685,6 +727,174 @@ def safe_chunk_reset(save_path: Path) -> None:
             except Exception as e:
                 print(f"Error deleting {file_name}: {e}")
         print("Safe chunk reset complete.")
+
+
+def scan_region_for_chests_logic(file_path: Path) -> List[dict]:
+    if not (zstd and bson):
+        print("Error: zstandard and pymongo (bson) are required for region scanning.")
+        return []
+
+    chests = []
+    try:
+        with open(file_path, "rb") as f:
+            f.seek(20)
+            header = f.read(12)
+            if len(header) < 12: return []
+            version, entries, chunk_size = struct.unpack(">III", header)
+            
+            table = f.read(entries * 8)
+            dctx = zstd.ZstdDecompressor()
+            
+            for i in range(entries):
+                entry = table[i*8:(i+1)*8]
+                sector, timestamp = struct.unpack(">II", entry)
+                
+                if sector == 0:
+                    continue
+                
+                f.seek(sector * 4096 + 32)
+                len_data = f.read(8)
+                if len(len_data) < 8: continue
+                uncomp_len, comp_len = struct.unpack(">II", len_data)
+                
+                if comp_len == 0 or comp_len > 1000000: continue
+                    
+                f.seek(sector * 4096 + 40)
+                compressed = f.read(comp_len)
+                
+                try:
+                    uncompressed = dctx.decompress(compressed, max_output_size=uncomp_len + 1024)
+                    decoded = bson.BSON(uncompressed).decode()
+                    
+                    bc_chunk = decoded.get("Components", {}).get("BlockComponentChunk", {})
+                    bc = bc_chunk.get("BlockComponents", {})
+                    
+                    for pos, data in bc.items():
+                        if isinstance(data, dict):
+                            inv = data.get("Components", {}).get("StorageInventory", {})
+                            if inv:
+                                chunk_x = i % 32
+                                chunk_z = i // 32
+                                chests.append({
+                                    "pos_index": pos,
+                                    "chunk": (chunk_x, chunk_z),
+                                    "inventory": inv,
+                                    "sector": sector,
+                                    "uncomp_len": uncomp_len,
+                                    "comp_len": comp_len,
+                                    "full_data": decoded # We keep this for editing
+                                })
+                except Exception:
+                    continue
+    except Exception as e:
+        print(f"Error scanning region: {e}")
+                
+    return chests
+
+
+def explore_regions(save_path: Path) -> None:
+    chunks_dir = save_path / "universe" / "worlds" / "default" / "chunks"
+    if not chunks_dir.exists():
+        print("Chunks directory not found.")
+        return
+
+    region_files = list(chunks_dir.glob("*.region.bin"))
+    if not region_files:
+        print("No .region.bin files found.")
+        return
+
+    while True:
+        os.system('cls' if os.name == 'nt' else 'clear')
+        choices = [f.name for f in region_files]
+        selection = select_with_numbers("Select Region to Explore:", choices + ["Back"])
+        
+        if selection == "Back":
+            break
+
+        file_path = chunks_dir / selection
+        console.print(f"[bold yellow]Scanning {selection} for interesting blocks (Chests)...[/]")
+        chests = scan_region_for_chests_logic(file_path)
+        
+        if not chests:
+            print("No chests found in this region.")
+            input("Press Enter to continue...")
+            continue
+
+        while True:
+            os.system('cls' if os.name == 'nt' else 'clear')
+            print(f"Region: {selection} | Found {len(chests)} Chests")
+            sub_menu = ["List All Chests", "Search for Item ID", "Back"]
+            sub_choice = select_with_numbers("Region Explorer Options:", sub_menu)
+            
+            if sub_choice == "Back":
+                break
+            
+            if sub_choice == "List All Chests":
+                while True:
+                    chest_options = [f"Chest at Chunk {c['chunk']} Index {c['pos_index']}" for c in chests]
+                    chest_choice = select_with_numbers(f"Select Chest to View:", chest_options + ["Back"])
+                    
+                    if chest_choice == "Back":
+                        break
+                        
+                    idx = chest_options.index(chest_choice)
+                    chest = chests[idx]
+                    view_chest_contents(chest)
+
+            elif sub_choice == "Search for Item ID":
+                search_term = inquirer.text(message="Enter Item ID to search (e.g. hytale:gold_ingot):").execute()
+                if search_term:
+                    results = []
+                    for c in chests:
+                        inv = c['inventory'].get('Inventory', {})
+                        items = inv.get('Items', [])
+                        matches = []
+                        if isinstance(items, list):
+                            matches = [i for i in items if search_term.lower() in i.get("Id", "").lower()]
+                        elif isinstance(items, dict):
+                            matches = [i for i in items.values() if search_term.lower() in i.get("Id", "").lower()]
+                        
+                        if matches:
+                            results.append((c, matches))
+                    
+                    if not results:
+                        print(f"No items matching '{search_term}' found.")
+                    else:
+                        table = Table(title=f"Search Results for '{search_term}'")
+                        table.add_column("Location", style="cyan")
+                        table.add_column("Item", style="white")
+                        table.add_column("Count", justify="right", style="green")
+                        for c, matches in results:
+                            loc = f"Chunk {c['chunk']} [{c['pos_index']}]"
+                            for m in matches:
+                                table.add_row(loc, m.get("Id"), str(m.get("Count", 1)))
+                        console.print(table)
+                    input("Press Enter to continue...")
+
+
+def view_chest_contents(chest: dict) -> None:
+    while True:
+        inv = chest['inventory'].get('Inventory', {})
+        items = inv.get('Items', [])
+        
+        table = Table(title=f"Chest Content (Chunk {chest['chunk']} Index {chest['pos_index']})")
+        table.add_column("Slot", justify="right", style="cyan")
+        table.add_column("Item ID", style="white")
+        table.add_column("Quantity", justify="right", style="green")
+        
+        if isinstance(items, list):
+            for item in items:
+                table.add_row(str(item.get("Slot", "?")), item.get("Id", "Unknown"), str(item.get("Count", 1)))
+        elif isinstance(items, dict):
+            for slot, item in items.items():
+                table.add_row(str(slot), item.get("Id", "Unknown"), str(item.get("Count", 1)))
+
+        console.print(table)
+        print("\n[NOTE] Editing chest contents in binary files is currently READ-ONLY.")
+        
+        choice = select_with_numbers("Options:", ["Refresh", "Back"])
+        if choice == "Back":
+            break
 
 
 def edit_instance_data(save_path: Path) -> None:
@@ -973,10 +1183,12 @@ def main():
             
             elif choice.startswith("Advanced / Mod Tools"):
                 while True:
-                    adv_options = ["Safe Chunk Reset", "Instance Editor", "Raw JSON Component Editor", "Back"]
+                    adv_options = ["Region/Chunk Data Explorer (Scan for Chests)", "Safe Chunk Reset", "Instance Editor", "Raw JSON Component Editor", "Back"]
                     adv_choice = select_with_numbers("Advanced / Mod Tools", adv_options)
                     if adv_choice == "Back":
                         break
+                    elif adv_choice.startswith("Region/Chunk"):
+                        explore_regions(save_path)
                     elif adv_choice == "Safe Chunk Reset":
                         safe_chunk_reset(save_path)
                     elif adv_choice.startswith("Instance"):

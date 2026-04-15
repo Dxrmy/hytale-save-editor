@@ -23,8 +23,12 @@ def read_chunk_at_sector(file_path, sector, size=128):
             pass
 
 if __name__ == "__main__":
-    path = r"C:\Users\kmric\AppData\Roaming\Hytale\UserData\Saves\Orbis Origin\universe\worlds\default\chunks\1.0.region.bin"
-    # Entry 0: 343
-    read_chunk_at_sector(path, 343)
-    # Entry 1: 2268
-    read_chunk_at_sector(path, 2268)
+    import sys
+    if len(sys.argv) < 3:
+        print("Usage: python peek_sector.py <file_path> <sector> [size]")
+        sys.exit(1)
+    
+    path = sys.argv[1]
+    sector = int(sys.argv[2])
+    size = int(sys.argv[3]) if len(sys.argv) > 3 else 128
+    read_chunk_at_sector(path, sector, size)

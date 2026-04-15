@@ -62,9 +62,14 @@ def scan_region_for_chests(file_path):
     return chests
 
 if __name__ == "__main__":
-    path = r"C:\Users\kmric\AppData\Roaming\Hytale\UserData\Saves\Orbis Origin\universe\worlds\default\chunks\1.0.region.bin"
+    import sys
+    if len(sys.argv) < 2:
+        print("Usage: python scan_chests.py <file_path>")
+        sys.exit(1)
+    
+    path = sys.argv[1]
     print(f"Scanning {path} for chests...")
-    chests = scan_region_for_chests(path)
+    chests = scan_region_for_chests_logic(path) if "scan_region_for_chests_logic" in locals() else scan_region_for_chests(path)
     print(f"Found {len(chests)} chests.")
     
     for c in chests:

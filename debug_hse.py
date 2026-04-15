@@ -1,15 +1,17 @@
 import json
+import shutil
 from pathlib import Path
 import sys
 import os
 
-# Import the logic directly from hse.py
-# We add the directory to sys.path to allow importing hse
-sys.path.append(r"D:\GitHub\Repos\External\hytale-save-editor")
+# Get the directory of the current script
+SCRIPT_DIR = Path(__file__).parent.absolute()
+sys.path.append(str(SCRIPT_DIR))
+
 try:
     import hse
 except ImportError:
-    print("Error: Could not import hse.py. Ensure the path is correct.")
+    print(f"Error: Could not import hse.py from {SCRIPT_DIR}. Ensure the file exists.")
     sys.exit(1)
 
 def create_mock_save(temp_dir):
@@ -34,10 +36,11 @@ def create_mock_save(temp_dir):
         json.dump(player_data, f)
         
     # Mock Waypoints
+    # The real format is a list in "Markers" key
     marker_data = {
-        "Markers": {
-            "1": {"Name": "Spawn", "Position": {"X": 100.0, "Y": 50.0, "Z": 100.0}}
-        }
+        "Markers": [
+            {"Name": "Spawn", "Position": {"X": 100.0, "Y": 50.0, "Z": 100.0}}
+        ]
     }
     with open(world_res_dir / "BlockMapMarkers.json", "w") as f:
         json.dump(marker_data, f)
@@ -60,12 +63,13 @@ def test_feature_mappings(save_path):
     print(f"Reputation Mapping: {'PASS' if rep == 100 else 'FAIL'} ({rep})")
     
     # 3. Test Waypoint Safety Offset
-    # Simulate the waypoint logic
-    with open(save_path / "universe" / "worlds" / "default" / "resources" / "BlockMapMarkers.json", "r") as f:
-        markers = json.load(f)
-    
-    target_pos = markers["Markers"]["1"]["Position"]
     # HSE logic for waypoint teleport
+    marker_path = save_path / "universe" / "worlds" / "default" / "resources" / "BlockMapMarkers.json"
+    with open(marker_path, "r") as f:
+        m_data = json.load(f)
+    
+    target_marker = m_data["Markers"][0]
+    target_pos = target_marker["Position"]
     new_y = target_pos["Y"] + 2.0
     print(f"Waypoint Y Safety (+2.0): {'PASS' if new_y == 52.0 else 'FAIL'} ({new_y})")
     
@@ -74,16 +78,16 @@ def test_feature_mappings(save_path):
     print(f"Inventory ID Mapping: {'PASS' if inv_item == 'hytale:sword' else 'FAIL'} ({inv_item})")
 
 if __name__ == "__main__":
-    temp_test_dir = Path("D:/GitHub/Repos/External/hytale-save-editor/temp_test")
+    temp_test_dir = SCRIPT_DIR / "temp_test"
     if temp_test_dir.exists():
         shutil.rmtree(temp_test_dir)
     temp_test_dir.mkdir()
     
     try:
-        import shutil
         save = create_mock_save(temp_test_dir)
         test_feature_mappings(save)
     finally:
         # Cleanup
-        shutil.rmtree(temp_test_dir)
+        if temp_test_dir.exists():
+            shutil.rmtree(temp_test_dir)
         print("--- Debug Finished ---")

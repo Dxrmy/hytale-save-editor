@@ -1,2 +1,4 @@
 ﻿InquirerPy
 rich
+zstandard
+pymongo

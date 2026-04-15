@@ -26,7 +26,14 @@ def decompress_chunk(file_path, sector, comp_len, uncomp_len):
             print(f"Decompression failed: {e}")
 
 if __name__ == "__main__":
-    path = r"C:\Users\kmric\AppData\Roaming\Hytale\UserData\Saves\Orbis Origin\universe\worlds\default\chunks\1.0.region.bin"
-    # Entry 0: 343
-    # comp_len = 0x4263 (16995), uncomp_len = 0x4de86 (319110)
-    decompress_chunk(path, 343, 16995, 319110)
+    import sys
+    if len(sys.argv) < 5:
+        print("Usage: python decompress_chunk.py <file_path> <sector> <comp_len> <uncomp_len>")
+        print(r"Example: python decompress_chunk.py 1.0.region.bin 343 16995 319110")
+        sys.exit(1)
+    
+    path = sys.argv[1]
+    sector = int(sys.argv[2])
+    comp_len = int(sys.argv[3])
+    uncomp_len = int(sys.argv[4])
+    decompress_chunk(path, sector, comp_len, uncomp_len)

@@ -20,5 +20,8 @@ def peek_region(file_path):
             print(f"  Entry {i}: {val1:08x} {val2:08x} ({val1}, {val2})")
 
 if __name__ == "__main__":
-    path = r"C:\Users\kmric\AppData\Roaming\Hytale\UserData\Saves\Orbis Origin\universe\worlds\default\chunks\1.0.region.bin"
-    peek_region(path)
+    import sys
+    if len(sys.argv) > 1:
+        peek_region(sys.argv[1])
+    else:
+        print("Usage: python peek_region_v2.py <file_path>")

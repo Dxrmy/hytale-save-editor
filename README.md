@@ -54,7 +54,8 @@ The project is currently in an active development phase, focusing on expanding d
 - [x] Initial CLI implementation
 - [x] Backup infrastructure
 - [x] Save chunk decompression logic
-- [x] BSON data mapping for chest contents (Explorer & Search)
+- [ ] BSON data mapping for chest contents (Currently non-functional)
+- [ ] Waypoint Teleport (Currently non-functional)
 - [/] Entity attribute modification (Players done, Entities partial)
 
 ## 🛠 Tech Stack

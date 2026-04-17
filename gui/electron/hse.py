@@ -740,7 +740,7 @@ def scan_region_for_chests_logic(file_path: Path, headless: bool = False) -> Lis
                 
                 f.seek(sector * 4096 + 32)
                 len_data = f.read(8)
-                if len_data) < 8: continue
+                if len(len_data) < 8: continue
                 uncomp_len, comp_len = struct.unpack(">II", len_data)
                 
                 if comp_len == 0 or comp_len > 1000000: continue

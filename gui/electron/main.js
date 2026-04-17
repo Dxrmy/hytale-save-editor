@@ -44,7 +44,12 @@ app.on('window-all-closed', () => {
 ipcMain.handle('hse-command', async (event, { command, args }) => {
   return new Promise((resolve, reject) => {
     const pythonPath = 'python'; // Assumes python is in PATH
-    const scriptPath = path.join(__dirname, '../../hse.py');
+    
+    // Resolve script path: check packaged location first, then dev location
+    let scriptPath = path.join(__dirname, 'hse.py'); // Packaged next to main.js
+    if (!require('fs').existsSync(scriptPath)) {
+        scriptPath = path.join(__dirname, '../../hse.py'); // Dev location
+    }
     
     const cmdArgs = ['--headless', command, ...args];
     console.log(`Executing: ${pythonPath} ${scriptPath} ${cmdArgs.join(' ')}`);

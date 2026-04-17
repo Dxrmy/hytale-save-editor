@@ -11,35 +11,37 @@ The project consists of a **Python Core Engine** for data processing and an **El
 
 ### 1. Core Engine (Python)
 The backend logic is centralized in `hse.py`. It handles:
-- **Environment Detection**: Automatically locates Hytale saves and game installation paths.
-- **Dynamic Asset Scanning**: HSE automatically scans Hytale's `Assets.zip` to find item and creature IDs. This ensures the app stays up-to-date with new Hytale patches automatically.
+- **Environment Detection**: Automatically locates Hytale saves via `%APPDATA%`.
 - **Backup System**: Creates timestamped clones of saves before any write operation.
 - **Binary Parsing**: 
-    - Decodes `.region.bin` files with multi-document BSON support.
+    - Decodes `.region.bin` files (Hytale's custom world format).
     - Decompresses chunks using **Zstandard**.
     - Decodes chunk data from **BSON** (Binary JSON) to Python dictionaries.
-- **Headless Mode**: A CLI interface that outputs raw JSON for the Electron GUI.
+- **Headless Mode**: A CLI interface that outputs raw JSON, allowing external tools (like the Electron GUI) to query and update the save state.
 
 ### 2. Frontend (Electron + React + Vite)
 The UI is built with modern web technologies:
-- **Electron**: Desktop shell and Python bridge.
-- **React (TypeScript)**: State and UI management.
-- **Tailwind CSS**: Sleek, Hytale-themed design.
-- **Vite**: Build tool for performance.
+- **Electron**: Provides the desktop shell and the "Bridge" to execute Python commands.
+- **React (TypeScript)**: Manages the state and user interface components.
+- **Vite**: The build tool ensuring fast development and optimized production bundles.
+- **IPC Bridge**: A secure communication layer (`ipcMain`/`ipcRenderer`) that spawns Python processes as child tasks and captures their JSON output.
 
 ---
 
 ## 🚀 How to Use
 
-### Visual GUI (Recommended)
+### Terminal Interface (CLI)
+For power users who prefer the command line:
+1. Open a terminal in the project root.
+2. Run `python hse.py`.
+3. Follow the interactive menus to edit player stats, inventories, or explore world regions.
+
+### GUI Interface (Electron)
+For a visual experience:
 1. Navigate to the `gui` directory.
 2. Install dependencies: `npm install`.
 3. Launch development mode: `npm run dev`.
-4. Select a save to see players and world settings.
-
-### Terminal Interface (CLI)
-1. Run `python hse.py`.
-2. Follow the interactive menus.
+4. The app will open, allowing you to browse saves and players visually.
 
 ---
 
@@ -47,18 +49,35 @@ The UI is built with modern web technologies:
 
 ### 1. Player Editing
 - **Vital Stats**: Modify Health, Mana, and Stamina.
-- **Position & Waypoints**: Teleport to fixed world waypoints or custom player-placed markers.
-- **Inventory**: Edit all inventory types (Hotbar, Storage, Backpack, Armor, Utility).
-- **Recipes & Bestiary**: Toggle hundreds of dynamic recipes and creature memories.
+- **Position**: Teleport players to specific X, Y, Z coordinates.
+- **Inventory**: View and edit items in the Hotbar, Storage, Backpack, Armor, and Utility slots.
+- **Recipes**: A "Comprehensive Pack" unlocker that gives you access to almost all items (including various chests).
 
 ### 2. World Exploration
-- **Global Region Explorer**: Scans every region file in the world to index storage blocks (Chests), Spawners, and Signs.
-- **Universal Search**: Find any item across all containers in the world instantly.
+- **Region Scanner**: Scans binary world files for "BlockComponent" data.
+- **Chest Finder**: Automatically identifies all storage containers in a region and lists their contents.
+- **Item Search**: Search for specific Item IDs (e.g., `hytale:diamond`) across all discovered chests in a region.
 
-### 3. World Management
-- **Safe Chunk Reset**: Force Hytale to regenerate specific regions by deleting them.
-- **Hard Reset**: Reset the entire world with a new seed while preserving players (with mandatory backup).
-- **Save Renaming**: Cleanly rename save folders and display names.
+### 3. Safety & Maintenance
+- **Safe Chunk Reset**: Selectively delete region files to force the game to regenerate specific areas.
+- **Hard Reset**: Reset an entire world with a new seed while maintaining a mandatory backup.
+- **Save Renaming**: Cleanly rename save folders and their internal display names.
+
+---
+
+## 🧪 Technical Implementation Notes
+
+### The Region File Format
+Hytale saves chunks in `.region.bin` files. HSE parses these by:
+1. Reading the 32-byte header (Magic, Version, Entries).
+2. Navigating the Sector Table (1024 entries of 8 bytes each).
+3. Locating the 4096-byte sectors.
+4. Extracting Zstd-compressed BSON data from each sector.
+
+### Headless Bridge Protocol
+When the GUI needs data, it calls `hse.py --headless <command>`.
+- **Example**: `python hse.py --headless list-saves` returns a JSON array of available saves.
+- This allows the GUI to be completely decoupled from the complex binary logic, making it easier to maintain.
 
 ---
 
@@ -66,6 +85,7 @@ The UI is built with modern web technologies:
 - **Python 3.13+**
 - **Node.js 18+**
 - Python Packages: `zstandard`, `pymongo` (for BSON), `InquirerPy`, `rich`.
+- Node Packages: `electron`, `react`, `lucide-react`, `vite`.
 
 ---
 *Developed by Dxrmy | Hytale Save Editor © 2026*

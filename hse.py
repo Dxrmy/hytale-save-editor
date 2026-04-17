@@ -103,15 +103,6 @@ def get_players(save_path: Path) -> List[Path]:
     return list(player_dir.glob("*.json")) if player_dir.exists() else []
 
 
-def get_world_name(save_path: Path) -> str:
-    """Detects the world folder name (usually 'default')."""
-    worlds_dir = save_path / "universe" / "worlds"
-    if worlds_dir.exists():
-        worlds = [d.name for d in worlds_dir.iterdir() if d.is_dir()]
-        return worlds[0] if worlds else "default"
-    return "default"
-
-
 def select_with_numbers(message: str, choices: List[str]) -> str:
     """Helper to provide numeric selection in menus."""
     numbered_choices = [f"{i+1}. {choice}" for i, choice in enumerate(choices)]
@@ -262,8 +253,7 @@ def edit_inventory(player_path: Path):
 
 
 def edit_gameplay_toggles(save_path: Path):
-    world_name = get_world_name(save_path)
-    conf_path = save_path / "universe" / "worlds" / world_name / "config.json"
+    conf_path = save_path / "universe" / "worlds" / "default" / "config.json"
     if not conf_path.exists():
         print("Config not found.")
         return
@@ -294,8 +284,7 @@ def edit_gameplay_toggles(save_path: Path):
 
 
 def edit_world_config(save_path: Path):
-    world_name = get_world_name(save_path)
-    conf_path = save_path / "universe" / "worlds" / world_name / "config.json"
+    conf_path = save_path / "universe" / "worlds" / "default" / "config.json"
     if not conf_path.exists():
         print("Config not found.")
         return
@@ -330,8 +319,7 @@ def edit_world_config(save_path: Path):
 
 
 def edit_world_time(save_path: Path):
-    world_name = get_world_name(save_path)
-    time_path = save_path / "universe" / "worlds" / world_name / "resources" / "Time.json"
+    time_path = save_path / "universe" / "worlds" / "default" / "resources" / "Time.json"
     if not time_path.exists():
         print("Time.json not found.")
         return
@@ -588,54 +576,37 @@ def edit_quests(player_path: Path) -> None:
 
 def waypoint_teleport(player_path: Path, save_path: Path) -> None:
     # CLI version still uses simple logic, GUI uses the new list-waypoints command
-    world_name = get_world_name(save_path)
-    resource_dir = save_path / "universe" / "worlds" / world_name / "resources"
-    
+    marker_path = save_path / "universe" / "worlds" / "default" / "resources" / "BlockMapMarkers.json"
+    if not marker_path.exists():
+        print(f"Markers file not found at {marker_path}")
+        return
+
     try:
+        with open(marker_path, "r") as f:
+            marker_data = json.load(f)
         with open(player_path, "r") as f:
             player_data = json.load(f)
     except Exception as e:
         print(f"Error loading files: {e}")
         return
 
-    all_markers = []
-    
-    # 1. BlockMapMarkers.json
-    block_path = resource_dir / "BlockMapMarkers.json"
-    if block_path.exists():
-        try:
-            with open(block_path, "r") as f: data = json.load(f)
-            raw = data.get("Markers", [])
-            markers = list(raw.values()) if isinstance(raw, dict) else raw
-            for m in markers:
-                if isinstance(m, dict) and "Position" in m: all_markers.append(m)
-        except: pass
-        
-    # 2. SharedUserMapMarkers.json
-    user_path = resource_dir / "SharedUserMapMarkers.json"
-    if user_path.exists():
-        try:
-            with open(user_path, "r") as f: data = json.load(f)
-            raw = data.get("UserMarkers", [])
-            for m in raw:
-                if isinstance(m, dict):
-                    all_markers.append({
-                        "Name": m.get("Label") or m.get("Id", "Custom").split('_')[-1][:8],
-                        "Position": {"X": m.get("X", 0), "Y": m.get("Y", 100), "Z": m.get("Z", 0)}
-                    })
-        except: pass
+    markers_raw = marker_data.get("Markers", [])
+    if isinstance(markers_raw, dict):
+        markers = list(markers_raw.values())
+    else:
+        markers = markers_raw
 
-    if not all_markers:
-        print("No markers found.")
+    if not markers:
+        print("No markers found in BlockMapMarkers.json.")
         return
 
-    marker_names = [m.get("Name", "Unnamed") for m in all_markers]
+    marker_names = [m.get("Name", "Unnamed") if isinstance(m, dict) else str(m) for m in markers]
     selection = select_with_numbers("Select Waypoint to Teleport:", marker_names + ["Back"])
     
     if selection == "Back":
         return
 
-    selected_marker = next((m for m in all_markers if m.get("Name") == selection), None)
+    selected_marker = next((m for m in markers if m.get("Name") == selection), None)
     if not selected_marker:
         print("Marker not found.")
         return
@@ -647,15 +618,15 @@ def waypoint_teleport(player_path: Path, save_path: Path) -> None:
 
     new_pos = {
         "X": float(pos.get("X", 0)),
-        "Y": float(pos.get("Y", 0)) + 2.0, 
+        "Y": float(pos.get("Y", 0)) + 2.0, # Add 2.0 to avoid spawning underground
         "Z": float(pos.get("Z", 0))
     }
 
     # Update current position
     set_nested(player_data, ["Components", "Transform", "Position"], new_pos)
     
-    # Update last position
-    last_pos_path = ["Components", "Player", "PlayerData", "PerWorldData", world_name, "LastPosition"]
+    # Update last position (per world data)
+    last_pos_path = ["Components", "Player", "PlayerData", "PerWorldData", "default", "LastPosition"]
     set_nested(player_data, last_pos_path, new_pos)
 
     with open(player_path, "w") as f:
@@ -708,8 +679,10 @@ def edit_mod_components(player_path: Path) -> None:
 
 
 def safe_chunk_reset(save_path: Path) -> None:
-    world_name = get_world_name(save_path)
-    chunks_dir = save_path / "universe" / "worlds" / world_name / "chunks"
+    """
+    Allows selective deletion of chunk files to force regeneration.
+    """
+    chunks_dir = save_path / "universe" / "worlds" / "default" / "chunks"
     if not chunks_dir.exists():
         print("Chunks directory not found.")
         return
@@ -744,7 +717,7 @@ def safe_chunk_reset(save_path: Path) -> None:
 
 def scan_region_for_chests_logic(file_path: Path, headless: bool = False) -> List[dict]:
     if not (zstd and bson):
-        if not headless: print("Error: zstandard and pymongo (bson) are required.")
+        if not headless: print("Error: zstandard and pymongo (bson) are required for region scanning.")
         return []
 
     chests = []
@@ -761,57 +734,65 @@ def scan_region_for_chests_logic(file_path: Path, headless: bool = False) -> Lis
             for i in range(entries):
                 entry = table[i*8:(i+1)*8]
                 sector, timestamp = struct.unpack(">II", entry)
-                if sector == 0: continue
                 
-                # Check for 32-byte sector header and 8-byte length header
+                if sector == 0:
+                    continue
+                
                 f.seek(sector * 4096 + 32)
                 len_data = f.read(8)
                 if len(len_data) < 8: continue
                 uncomp_len, comp_len = struct.unpack(">II", len_data)
                 
-                if comp_len == 0 or comp_len > 2000000: continue
+                if comp_len == 0 or comp_len > 1000000: continue
                     
                 f.seek(sector * 4096 + 40)
                 compressed = f.read(comp_len)
                 
                 try:
-                    uncompressed = dctx.decompress(compressed, max_output_size=uncomp_len + 4096)
+                    uncompressed = dctx.decompress(compressed, max_output_size=uncomp_len + 1024)
+                    decoded = bson.BSON(uncompressed).decode()
                     
-                    # Handle multiple BSON documents in one chunk
-                    offset = 0
-                    while offset < len(uncompressed):
-                        doc_size = struct.unpack("<i", uncompressed[offset:offset+4])[0]
-                        if doc_size <= 0 or offset + doc_size > len(uncompressed): break
-                        
-                        doc_data = uncompressed[offset:offset+doc_size]
-                        decoded = bson.BSON(doc_data).decode()
-                        offset += doc_size
-                        
-                        bc_chunk = decoded.get("Components", {}).get("BlockComponentChunk", {})
-                        bc = bc_chunk.get("BlockComponents", {})
-                        
-                        for pos, data in bc.items():
-                            if isinstance(data, dict):
-                                inv = data.get("Components", {}).get("StorageInventory", {})
-                                spawner = data.get("Components", {}).get("Spawner", {})
-                                sign = data.get("Components", {}).get("Sign", {})
-                                
-                                result = {
+                    bc_chunk = decoded.get("Components", {}).get("BlockComponentChunk", {})
+                    bc = bc_chunk.get("BlockComponents", {})
+                    
+                    for pos, data in bc.items():
+                        if isinstance(data, dict):
+                            # Try to extract multiple things
+                            inv = data.get("Components", {}).get("StorageInventory", {})
+                            spawner = data.get("Components", {}).get("Spawner", {})
+                            sign = data.get("Components", {}).get("Sign", {})
+                            
+                            chunk_x = i % 32
+                            chunk_z = i // 32
+                            
+                            if inv:
+                                chests.append({
+                                    "type": "Chest",
                                     "pos_index": pos,
-                                    "chunk": (i % 32, i // 32),
-                                    "sector": sector
-                                }
-                                
-                                if inv:
-                                    result.update({"type": "Chest", "inventory": inv})
-                                    chests.append(result)
-                                elif spawner:
-                                    result.update({"type": "Spawner", "spawner": spawner})
-                                    chests.append(result)
-                                elif sign:
-                                    result.update({"type": "Sign", "sign": sign})
-                                    chests.append(result)
-                except:
+                                    "chunk": (chunk_x, chunk_z),
+                                    "inventory": inv,
+                                    "sector": sector,
+                                    "full_data": decoded
+                                })
+                            elif spawner:
+                                chests.append({
+                                    "type": "Spawner",
+                                    "pos_index": pos,
+                                    "chunk": (chunk_x, chunk_z),
+                                    "spawner": spawner,
+                                    "sector": sector,
+                                    "full_data": decoded
+                                })
+                            elif sign:
+                                chests.append({
+                                    "type": "Sign",
+                                    "pos_index": pos,
+                                    "chunk": (chunk_x, chunk_z),
+                                    "sign": sign,
+                                    "sector": sector,
+                                    "full_data": decoded
+                                })
+                except Exception:
                     continue
     except Exception as e:
         if not headless: print(f"Error scanning region: {e}")
@@ -820,8 +801,7 @@ def scan_region_for_chests_logic(file_path: Path, headless: bool = False) -> Lis
 
 
 def explore_regions(save_path: Path) -> None:
-    world_name = get_world_name(save_path)
-    chunks_dir = save_path / "universe" / "worlds" / world_name / "chunks"
+    chunks_dir = save_path / "universe" / "worlds" / "default" / "chunks"
     if not chunks_dir.exists():
         print("Chunks directory not found.")
         return
@@ -840,38 +820,64 @@ def explore_regions(save_path: Path) -> None:
             break
 
         file_path = chunks_dir / selection
-        console.print(f"[bold yellow]Scanning {selection} for entities...[/]")
+        console.print(f"[bold yellow]Scanning {selection} for interesting blocks (Chests)...[/]")
         chests = scan_region_for_chests_logic(file_path)
         
         if not chests:
-            print("No interesting entities found in this region.")
+            print("No chests found in this region.")
             input("Press Enter to continue...")
             continue
 
         while True:
             os.system('cls' if os.name == 'nt' else 'clear')
-            print(f"Region: {selection} | Found {len(chests)} Entities")
-            sub_menu = ["List All", "Search for Item ID", "Back"]
+            print(f"Region: {selection} | Found {len(chests)} Chests")
+            sub_menu = ["List All Chests", "Search for Item ID", "Back"]
             sub_choice = select_with_numbers("Region Explorer Options:", sub_menu)
             
             if sub_choice == "Back":
                 break
             
-            if sub_choice == "List All":
-                for c in chests:
-                    print(f"[{c['type']}] Chunk {c['chunk']} Index {c['pos_index']}")
-                input("\nPress Enter to continue...")
+            if sub_choice == "List All Chests":
+                while True:
+                    chest_options = [f"Chest at Chunk {c['chunk']} Index {c['pos_index']}" for c in chests]
+                    chest_choice = select_with_numbers(f"Select Chest to View:", chest_options + ["Back"])
+                    
+                    if chest_choice == "Back":
+                        break
+                        
+                    idx = chest_options.index(chest_choice)
+                    chest = chests[idx]
+                    view_chest_contents(chest)
 
             elif sub_choice == "Search for Item ID":
-                search_term = inquirer.text(message="Enter Item ID:").execute()
+                search_term = inquirer.text(message="Enter Item ID to search (e.g. hytale:gold_ingot):").execute()
                 if search_term:
-                    results = [c for c in chests if c['type'] == 'Chest' and any(search_term.lower() in str(i).lower() for i in c['inventory'].get('Inventory', {}).get('Items', {}).values())]
+                    results = []
+                    for c in chests:
+                        inv = c['inventory'].get('Inventory', {})
+                        items = inv.get('Items', [])
+                        matches = []
+                        if isinstance(items, list):
+                            matches = [i for i in items if search_term.lower() in i.get("Id", "").lower()]
+                        elif isinstance(items, dict):
+                            matches = [i for i in items.values() if search_term.lower() in i.get("Id", "").lower()]
+                        
+                        if matches:
+                            results.append((c, matches))
+                    
                     if not results:
-                        print("No matches found.")
+                        print(f"No items matching '{search_term}' found.")
                     else:
-                        for c in results:
-                            print(f"MATCH: Chunk {c['chunk']} Index {c['pos_index']}")
-                    input("\nPress Enter to continue...")
+                        table = Table(title=f"Search Results for '{search_term}'")
+                        table.add_column("Location", style="cyan")
+                        table.add_column("Item", style="white")
+                        table.add_column("Count", justify="right", style="green")
+                        for c, matches in results:
+                            loc = f"Chunk {c['chunk']} [{c['pos_index']}]"
+                            for m in matches:
+                                table.add_row(loc, m.get("Id"), str(m.get("Count", 1)))
+                        console.print(table)
+                    input("Press Enter to continue...")
 
 
 def view_chest_contents(chest: dict) -> None:
@@ -892,7 +898,7 @@ def view_chest_contents(chest: dict) -> None:
                 table.add_row(str(slot), item.get("Id", "Unknown"), str(item.get("Count", 1)))
 
         console.print(table)
-        print("\n[NOTE] Editing chest contents is READ-ONLY.")
+        print("\n[NOTE] Editing chest contents in binary files is currently READ-ONLY.")
         
         choice = select_with_numbers("Options:", ["Refresh", "Back"])
         if choice == "Back":
@@ -900,8 +906,10 @@ def view_chest_contents(chest: dict) -> None:
 
 
 def edit_instance_data(save_path: Path) -> None:
-    world_name = get_world_name(save_path)
-    instance_path = save_path / "universe" / "worlds" / world_name / "resources" / "InstanceData.json"
+    """
+    Edits the InstanceData.json world resource.
+    """
+    instance_path = save_path / "universe" / "worlds" / "default" / "resources" / "InstanceData.json"
     if not instance_path.exists():
         print("InstanceData.json not found.")
         return
@@ -927,57 +935,69 @@ def edit_instance_data(save_path: Path) -> None:
         if isinstance(current_val, bool):
             data[key] = inquirer.confirm(message=f"Enable {key}?", default=current_val).execute()
         else:
-            new_val = inquirer.text(message=f"Enter new value for {key}:").execute()
+            new_val = inquirer.text(message=f"Enter new value for {key} (Current: {current_val}):").execute()
             if new_val and new_val.lower() != 'c':
-                if isinstance(current_val, int): data[key] = int(new_val)
-                elif isinstance(current_val, float): data[key] = float(new_val)
-                else: data[key] = new_val
+                if isinstance(current_val, int):
+                    try:
+                        data[key] = int(new_val)
+                    except ValueError:
+                        print("Invalid integer.")
+                elif isinstance(current_val, float):
+                    try:
+                        data[key] = float(new_val)
+                    except ValueError:
+                        print("Invalid float.")
+                else:
+                    data[key] = new_val
 
         with open(instance_path, "w") as f:
             json.dump(data, f, indent=4)
-        print("Updated.")
+        print(f"Updated {key} successfully.")
 
 
 def hard_reset_world(save_path: Path) -> Path:
-    console.print("[bold red]DANGER: Full world reset![/]")
-    if not inquirer.confirm(message="ARE YOU SURE?").execute():
+    """
+    Performs a hard reset of the world.
+    """
+    console.print("[bold red]DANGER: This will delete all world progress and reset players![/]")
+    if not inquirer.confirm(message="ARE YOU ABSOLUTELY SURE?").execute():
         return save_path
 
-    new_seed = inquirer.text(message="Enter new Seed:").execute()
+    new_seed = inquirer.text(message="Enter new Seed (integer):").execute()
     try:
         new_seed_val = int(new_seed)
     except ValueError:
+        print("Invalid seed.")
         return save_path
 
     create_backup(save_path)
-    world_name = get_world_name(save_path)
-    world_dir = save_path / "universe" / "worlds" / world_name
-    
-    conf_path = world_dir / "config.json"
+
+    # 1. Update config.json
+    conf_path = save_path / "universe" / "worlds" / "default" / "config.json"
     if conf_path.exists():
         with open(conf_path, "r") as f: data = json.load(f)
         data["Seed"] = new_seed_val
         with open(conf_path, "w") as f: json.dump(data, f, indent=4)
 
-    chunks_dir = world_dir / "chunks"
+    # 2. Delete chunks
+    chunks_dir = save_path / "universe" / "worlds" / "default" / "chunks"
     if chunks_dir.exists():
         for chunk_file in chunks_dir.glob("*"):
             if chunk_file.is_file(): chunk_file.unlink()
 
-    print("Hard reset complete.")
+    print("[BOLD GREEN]Hard reset complete.[/]")
     return save_path
 
 
 def save_renaming(save_path: Path) -> Path:
-    new_name = inquirer.text(message=f"New name:").execute()
+    new_name = inquirer.text(message=f"New name (Current: {save_path.name}):").execute()
     if not new_name or new_name.lower() == 'c': return save_path
 
     new_path = SAVE_BASE_PATH / new_name
     if new_path.exists(): return save_path
 
     try:
-        world_name = get_world_name(save_path)
-        conf_path = save_path / "universe" / "worlds" / world_name / "config.json"
+        conf_path = save_path / "universe" / "worlds" / "default" / "config.json"
         if conf_path.exists():
             with open(conf_path, "r") as f: data = json.load(f)
             data["DisplayName"] = new_name
@@ -1026,8 +1046,7 @@ def headless_main(args):
 
     elif args.command == "list-regions":
         save_path = SAVE_BASE_PATH / args.save
-        world_name = get_world_name(save_path)
-        chunks_dir = save_path / "universe" / "worlds" / world_name / "chunks"
+        chunks_dir = save_path / "universe" / "worlds" / "default" / "chunks"
         if not chunks_dir.exists():
             json_output([])
             return
@@ -1036,8 +1055,7 @@ def headless_main(args):
 
     elif args.command == "scan-region":
         save_path = SAVE_BASE_PATH / args.save
-        world_name = get_world_name(save_path)
-        file_path = save_path / "universe" / "worlds" / world_name / "chunks" / args.region
+        file_path = save_path / "universe" / "worlds" / "default" / "chunks" / args.region
         if not file_path.exists():
             json_output({"error": "Region file not found"})
             return
@@ -1049,8 +1067,7 @@ def headless_main(args):
 
     elif args.command == "scan-all-regions":
         save_path = SAVE_BASE_PATH / args.save
-        world_name = get_world_name(save_path)
-        chunks_dir = save_path / "universe" / "worlds" / world_name / "chunks"
+        chunks_dir = save_path / "universe" / "worlds" / "default" / "chunks"
         if not chunks_dir.exists():
             json_output([])
             return
@@ -1067,13 +1084,12 @@ def headless_main(args):
     elif args.command == "hard-reset":
         save_path = SAVE_BASE_PATH / args.save
         create_backup(save_path)
-        world_name = get_world_name(save_path)
-        conf_path = save_path / "universe" / "worlds" / world_name / "config.json"
+        conf_path = save_path / "universe" / "worlds" / "default" / "config.json"
         if conf_path.exists():
             with open(conf_path, "r") as f: data = json.load(f)
             data["Seed"] = int(args.seed)
             with open(conf_path, "w") as f: json.dump(data, f, indent=4)
-        chunks_dir = save_path / "universe" / "worlds" / world_name / "chunks"
+        chunks_dir = save_path / "universe" / "worlds" / "default" / "chunks"
         if chunks_dir.exists():
             for chunk_file in chunks_dir.glob("*"):
                 if chunk_file.is_file(): chunk_file.unlink()
@@ -1090,8 +1106,7 @@ def headless_main(args):
 
     elif args.command == "safe-chunk-reset":
         save_path = SAVE_BASE_PATH / args.save
-        world_name = get_world_name(save_path)
-        chunks_dir = save_path / "universe" / "worlds" / world_name / "chunks"
+        chunks_dir = save_path / "universe" / "worlds" / "default" / "chunks"
         try:
             target_file = chunks_dir / args.chunkfile
             if target_file.exists(): target_file.unlink()
@@ -1101,8 +1116,7 @@ def headless_main(args):
 
     elif args.command == "list-waypoints":
         save_path = SAVE_BASE_PATH / args.save
-        world_name = get_world_name(save_path)
-        resource_dir = save_path / "universe" / "worlds" / world_name / "resources"
+        resource_dir = save_path / "universe" / "worlds" / "default" / "resources"
         all_markers = []
         
         # 1. BlockMapMarkers.json
@@ -1143,8 +1157,7 @@ def headless_main(args):
     elif args.command == "teleport-player":
         save_path = SAVE_BASE_PATH / args.save
         player_path = Path(args.path)
-        world_name = get_world_name(save_path)
-        resource_dir = save_path / "universe" / "worlds" / world_name / "resources"
+        resource_dir = save_path / "universe" / "worlds" / "default" / "resources"
         try:
             with open(player_path, "r") as f: player_data = json.load(f)
             target_marker = None
@@ -1168,7 +1181,7 @@ def headless_main(args):
             pos = target_marker.get("Position", {})
             new_pos = {"X": float(pos.get("X", 0)), "Y": float(pos.get("Y", 0)) + 2.0, "Z": float(pos.get("Z", 0))}
             set_nested(player_data, ["Components", "Transform", "Position"], new_pos)
-            set_nested(player_data, ["Components", "Player", "PlayerData", "PerWorldData", world_name, "LastPosition"], new_pos)
+            set_nested(player_data, ["Components", "Player", "PlayerData", "PerWorldData", "default", "LastPosition"], new_pos)
             with open(player_path, "w") as f: json.dump(player_data, f, indent=4)
             json_output({"success": True, "new_pos": new_pos})
         except Exception as e:

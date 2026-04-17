@@ -15,6 +15,7 @@ export default function PlayerEditor({ playerPath, saveName, onShowError, onShow
   
   const [dynamicItems, setDynamicItems] = useState<string[]>([]);
   const [dynamicMemories, setDynamicMemories] = useState<string[]>([]);
+  const [translations, setTranslations] = useState<Record<string, string>>({});
 
   useEffect(() => {
     loadPlayer();
@@ -56,6 +57,7 @@ export default function PlayerEditor({ playerPath, saveName, onShowError, onShow
           } else if (res) {
               if (res.items) setDynamicItems(res.items);
               if (res.memories) setDynamicMemories(res.memories);
+              if (res.translations) setTranslations(res.translations);
           }
       } catch (e) {
           console.error("Failed to load dynamic assets:", e);
@@ -135,131 +137,142 @@ export default function PlayerEditor({ playerPath, saveName, onShowError, onShow
     }
   };
 
+  // --- REGISTRY LOGIC ---
+
+  const normalizeId = (id: string) => {
+      if (!id) return "";
+      const lower = id.toLowerCase().replace("hytale:", "");
+      return lower;
+  };
+
+  const getDisplayName = (id: string, type: 'item' | 'npc') => {
+      const rawId = id.replace("hytale:", "");
+      // Try various translation key patterns
+      const keys = [
+          `server.items.${rawId}.name`,
+          `server.npcRoles.${rawId}.name`,
+          `server.items.${rawId}`,
+          `server.npcRoles.${rawId}`,
+          rawId
+      ];
+      for (const k of keys) {
+          if (translations[k]) return translations[k];
+      }
+      // Formatting fallback: replace _ with space and capitalize
+      return rawId.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+  };
+
+  const isRecipeUnlocked = (recipeId: string) => {
+      const recipes = getNested(data, ["Components", "Player", "PlayerData", "KnownRecipes"]) || [];
+      const target = normalizeId(recipeId);
+      return recipes.some((r: string) => normalizeId(r) === target);
+  };
+
   const toggleRecipe = (recipeId: string) => {
     const recipesPath = ["Components", "Player", "PlayerData", "KnownRecipes"];
     const recipes = getNested(data, recipesPath) || [];
-    if (recipes.includes(recipeId)) {
-        setNested(recipesPath, recipes.filter(r => r !== recipeId));
+    const target = normalizeId(recipeId);
+    
+    const existingIdx = recipes.findIndex((r: string) => normalizeId(r) === target);
+    if (existingIdx > -1) {
+        setNested(recipesPath, recipes.filter((_: any, i: number) => i !== existingIdx));
     } else {
-        setNested(recipesPath, [...recipes, recipeId]);
+        setNested(recipesPath, [...recipes, recipeId.replace("hytale:", "")]);
     }
+  };
+
+  const isMemoryUnlocked = (memoryId: string) => {
+      const memories = getNested(data, ["Components", "PlayerMemories", "Memories"]) || [];
+      const target = normalizeId(memoryId);
+      return memories.some((m: any) => {
+          const role = (typeof m === 'string' ? m : m.NPCRole || m.id || m.Id || '').toLowerCase();
+          return normalizeId(role) === target;
+      });
   };
 
   const toggleMemory = (memoryId: string) => {
       const memoryPath = ["Components", "PlayerMemories", "Memories"];
       const memories = getNested(data, memoryPath) || [];
-      const existingIdx = memories.findIndex((m: any) => m === memoryId || m.id === memoryId);
+      const target = normalizeId(memoryId);
+      
+      const existingIdx = memories.findIndex((m: any) => {
+          const role = (typeof m === 'string' ? m : m.NPCRole || m.id || m.Id || '').toLowerCase();
+          return normalizeId(role) === target;
+      });
+
       if (existingIdx > -1) {
           setNested(memoryPath, memories.filter((_: any, i: number) => i !== existingIdx));
       } else {
-          setNested(memoryPath, [...memories, memoryId]);
+          setNested(memoryPath, [...memories, {
+              "Id": "NPC",
+              "NPCRole": memoryId.replace("hytale:", ""),
+              "CapturedTimestamp": Date.now()
+          }]);
       }
   };
 
   if (loading) return <div className="text-gray-500 animate-pulse">Loading player data...</div>;
   if (!data) return <div className="text-red-400">No data found or failed to parse.</div>;
 
-  // Skill detection logic
-  const potentialSkillPaths = [
-    ["Components", "Progression"],
-    ["Components", "Skills"],
-    ["Components", "Player", "PlayerData", "Progression"],
-    ["Components", "EndgamePlayerData"],
-    ["Components", "Player", "PlayerData"]
-  ];
-  let skillsPath = null;
-  for (const path of potentialSkillPaths) {
-    if (getNested(data, path) !== undefined) {
-      skillsPath = path;
-      break;
-    }
-  }
+  const skillsPath = [
+    ["Components", "Progression"], ["Components", "Skills"], ["Components", "Player", "PlayerData", "Progression"], ["Components", "EndgamePlayerData"]
+  ].find(p => getNested(data, p) !== undefined);
   const skillsObj = skillsPath ? getNested(data, skillsPath) : {};
 
-  // Reputation
-  const repPath = ["Components", "Player", "PlayerData", "ReputationData"];
-  const reputation = getNested(data, repPath) || {};
-
-  // Mod / Custom Components Detection
-  const knownComponents = [
-    "Nameplate", "BackpackInventory", "HotbarInventory", "StorageInventory", 
-    "Transform", "EntityStats", "Player", "UIComponentList", "hotbar_manager", 
-    "HitboxCollision", "UniqueItemUsages", "Instance", "UUID", "ArmorInventory", 
-    "HeadRotation", "DisplayName", "UtilityInventory", "Progression", "Skills", "EndgamePlayerData", "PlayerMemories"
-  ];
-  const modComponents = Object.keys(data.Components || {}).filter(k => !knownComponents.includes(k));
+  const reputation = getNested(data, ["Components", "Player", "PlayerData", "ReputationData"]) || {};
+  const modComponents = Object.keys(data.Components || {}).filter(k => ![
+    "Nameplate", "BackpackInventory", "HotbarInventory", "StorageInventory", "Transform", "EntityStats", 
+    "Player", "UIComponentList", "hotbar_manager", "HitboxCollision", "UniqueItemUsages", "Instance", 
+    "UUID", "ArmorInventory", "HeadRotation", "DisplayName", "UtilityInventory", "Progression", "Skills", 
+    "EndgamePlayerData", "PlayerMemories"
+  ].includes(k));
 
   const knownRecipes = getNested(data, ["Components", "Player", "PlayerData", "KnownRecipes"]) || [];
   const knownMemories = getNested(data, ["Components", "PlayerMemories", "Memories"]) || [];
 
   return (
-    <div className="space-y-6 pb-12 relative">
+    <div className="space-y-6 pb-12 relative font-sans">
       <div className="flex justify-between items-center bg-hytale-panel p-4 rounded-xl border border-gray-800 sticky top-0 z-10 shadow-sm">
         <div>
           <h2 className="text-xl font-bold text-white mb-1">Player Editor</h2>
-          <p className="text-sm text-gray-500 font-mono">{playerPath.split(/[\/\\]/).pop()}</p>
+          <p className="text-xs text-gray-500 font-mono">{playerPath.split(/[\/\\]/).pop()}</p>
         </div>
-        <button 
-          onClick={savePlayer}
-          className="flex items-center gap-2 bg-hytale-purple hover:bg-purple-500 text-white px-6 py-2.5 rounded-lg font-medium transition-all shadow-lg shadow-purple-500/20"
-        >
+        <button onClick={savePlayer} className="flex items-center gap-2 bg-hytale-purple hover:bg-purple-500 text-white px-6 py-2.5 rounded-lg font-medium transition-all shadow-lg shadow-purple-500/20">
           <SaveIcon size={18} /> Save Changes
         </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        
-        {/* Vital Stats & Position */}
-        <div className="space-y-6">
-          <div className="bg-hytale-panel p-6 rounded-xl border border-gray-800 shadow-sm">
-            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2 font-sans"><Heart size={20} className="text-red-400"/> Vital Stats</h3>
+        <div className="bg-hytale-panel p-6 rounded-xl border border-gray-800">
+            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2"><Heart size={20} className="text-red-400"/> Vital Stats</h3>
             <div className="space-y-3">
               {renderStat('Health', ["Components", "EntityStats", "Stats", "Health", "Value"])}
               {renderStat('Mana', ["Components", "EntityStats", "Stats", "Mana", "Value"])}
               {renderStat('Stamina', ["Components", "EntityStats", "Stats", "Stamina", "Value"])}
             </div>
-          </div>
-
-          <div className="bg-hytale-panel p-6 rounded-xl border border-gray-800 shadow-sm">
-            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2 font-sans"><MapPin size={20} className="text-green-400"/> Position & Navigation</h3>
-            <div className="space-y-3 mb-4">
-              {renderStat('X', ["Components", "Transform", "Position", "X"])}
-              {renderStat('Y', ["Components", "Transform", "Position", "Y"])}
-              {renderStat('Z', ["Components", "Transform", "Position", "Z"])}
-            </div>
-            
-            {waypoints.length > 0 ? (
-              <div className="border-t border-gray-800 pt-4 mt-4">
-                <h4 className="text-sm font-medium text-gray-400 mb-2 font-sans uppercase tracking-widest text-[10px]">Teleport to Waypoint</h4>
-                <div className="flex gap-2 flex-wrap max-h-32 overflow-y-auto pr-2 custom-scrollbar">
-                  {waypoints.map((wp: any, i) => (
-                    <button 
-                      key={i}
-                      onClick={() => teleportToWaypoint(wp.Name || 'Unnamed')}
-                      className="bg-[#1e1e1e] hover:bg-hytale-purple/20 border border-gray-700 hover:border-hytale-purple text-gray-300 hover:text-white px-3 py-1.5 rounded-md text-xs transition-colors font-medium"
-                    >
-                      {wp.Name || 'Unnamed'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="border-t border-gray-800 pt-4 mt-4 text-sm text-gray-500 italic">
-                No waypoints found in world.
-              </div>
-            )}
-          </div>
         </div>
 
-        {/* Inventory */}
-        <div className="bg-hytale-panel p-6 rounded-xl border border-gray-800 shadow-sm flex flex-col h-full">
+        <div className="bg-hytale-panel p-6 rounded-xl border border-gray-800">
+            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2"><MapPin size={20} className="text-green-400"/> Waypoints</h3>
+            <div className="grid grid-cols-3 gap-2 mb-4">
+                {renderStat('X', ["Components", "Transform", "Position", "X"])}
+                {renderStat('Y', ["Components", "Transform", "Position", "Y"])}
+                {renderStat('Z', ["Components", "Transform", "Position", "Z"])}
+            </div>
+            <div className="border-t border-gray-800 pt-4 max-h-32 overflow-y-auto custom-scrollbar flex flex-wrap gap-2">
+                {waypoints.map((wp: any, i) => (
+                    <button key={i} onClick={() => teleportToWaypoint(wp.Name)} className="bg-[#1e1e1e] hover:bg-hytale-purple/20 border border-gray-700 text-gray-300 px-3 py-1.5 rounded-md text-xs transition-colors">
+                        {translations[wp.Name] || wp.Name || 'Waypoint'}
+                    </button>
+                ))}
+                {waypoints.length === 0 && <p className="text-xs text-gray-500 italic">No waypoints found.</p>}
+            </div>
+        </div>
+
+        <div className="bg-hytale-panel p-6 rounded-xl border border-gray-800 flex flex-col">
           <div className="flex justify-between items-center mb-6">
-            <h3 className="text-lg font-bold text-white flex items-center gap-2 font-sans"><Package size={20} className="text-orange-400"/> Inventories</h3>
-            <select 
-              onChange={(e) => setActiveInventory(e.target.value)} 
-              value={activeInventory}
-              className="bg-[#121212] border border-gray-700 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-hytale-purple cursor-pointer font-sans"
-            >
+            <h3 className="text-lg font-bold text-white flex items-center gap-2"><Package size={20} className="text-orange-400"/> Inventories</h3>
+            <select onChange={(e) => setActiveInventory(e.target.value)} value={activeInventory} className="bg-[#121212] border border-gray-700 text-white text-xs rounded-lg px-2 py-1 focus:outline-none">
               <option value="HotbarInventory">Hotbar</option>
               <option value="StorageInventory">Storage</option>
               <option value="BackpackInventory">Backpack</option>
@@ -267,362 +280,134 @@ export default function PlayerEditor({ playerPath, saveName, onShowError, onShow
               <option value="UtilityInventory">Utility</option>
             </select>
           </div>
-          
-          <div className="flex-1 bg-[#1a1a1a] rounded-lg border border-gray-800 p-4 overflow-y-auto max-h-[400px] custom-scrollbar">
-            <div className="space-y-2">
+          <div className="flex-1 bg-[#1a1a1a] rounded-lg border border-gray-800 p-4 overflow-y-auto max-h-[300px] custom-scrollbar space-y-2">
               {Object.entries(getNested(data, ["Components", activeInventory, "Inventory", "Items"]) || {}).map(([slot, item]: [string, any]) => (
-                <div key={slot} className="flex gap-3 items-center bg-[#222] p-2 rounded-md border border-gray-700/50 hover:border-gray-600 transition-colors">
-                  <span className="w-12 text-center text-[10px] font-black text-gray-500 bg-[#151515] py-1 rounded uppercase tracking-tighter">S{slot}</span>
-                  <input 
-                    type="text" 
-                    value={item.Id || ''} 
-                    onChange={(e) => setNested(["Components", activeInventory, "Inventory", "Items", slot, "Id"], e.target.value)}
-                    className="flex-1 bg-[#111] border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-hytale-purple font-mono"
-                    placeholder="Item ID"
-                  />
-                  <input 
-                    type="number" 
-                    value={item.Quantity || item.Count || 1} 
-                    onChange={(e) => setNested(["Components", activeInventory, "Inventory", "Items", slot, "Quantity"], parseInt(e.target.value))}
-                    className="w-16 bg-[#111] border border-gray-700 rounded px-2 py-1 text-xs text-center text-green-400 font-mono focus:outline-none focus:border-hytale-purple"
-                  />
+                <div key={slot} className="flex gap-2 items-center bg-[#222] p-2 rounded border border-gray-700/50">
+                  <span className="w-8 text-[10px] font-black text-gray-500">S{slot}</span>
+                  <input type="text" value={item.Id || ''} onChange={(e) => setNested(["Components", activeInventory, "Inventory", "Items", slot, "Id"], e.target.value)} className="flex-1 bg-[#111] border border-gray-700 rounded px-2 py-1 text-xs text-gray-200" />
+                  <input type="number" value={item.Quantity || item.Count || 1} onChange={(e) => setNested(["Components", activeInventory, "Inventory", "Items", slot, "Quantity"], parseInt(e.target.value))} className="w-12 bg-[#111] border border-gray-700 rounded px-1 py-1 text-xs text-center text-green-400" />
                 </div>
               ))}
-              {!getNested(data, ["Components", activeInventory, "Inventory", "Items"]) && (
-                <div className="text-center py-8 text-gray-500 text-sm italic">
-                  This inventory section is empty or not initialized.
-                </div>
-              )}
-            </div>
           </div>
         </div>
 
-        {/* Recipes & Quests */}
-        <div className="bg-hytale-panel p-6 rounded-xl border border-gray-800 shadow-sm">
-          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2 font-sans"><BookOpen size={20} className="text-blue-400"/> Recipes & Quests</h3>
-          
-          <div className="space-y-6">
+        <div className="bg-hytale-panel p-6 rounded-xl border border-gray-800">
+          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2"><BookOpen size={20} className="text-blue-400"/> Progression</h3>
+          <div className="space-y-4">
             <div className="bg-[#1e1e1e] p-4 rounded-lg border border-gray-800">
-              <div className="flex justify-between items-center mb-2">
-                <span className="text-gray-300 font-medium text-sm font-sans">Known Recipes</span>
-                <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-1 rounded-full font-black uppercase tracking-widest">
-                  {knownRecipes.length} Unlocked
-                </span>
+              <div className="flex justify-between items-center mb-4">
+                <span className="text-gray-300 font-medium text-sm">Recipes</span>
+                <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-1 rounded-full font-black">{knownRecipes.length} Known</span>
               </div>
-              <div className="grid grid-cols-2 gap-2 mt-2">
-                  <button onClick={() => {
-                      const existing = getNested(data, ["Components", "Player", "PlayerData", "KnownRecipes"]) || [];
-                      setNested(["Components", "Player", "PlayerData", "KnownRecipes"], [...new Set([...existing, ...dynamicItems])]);
-                      onShowSuccess(`Unlocked all ${dynamicItems.length} items!`);
-                  }} className="bg-[#252525] hover:bg-[#333] border border-gray-700 text-gray-300 py-2 rounded-md text-xs transition-colors font-sans uppercase font-bold tracking-wider">
-                      Unlock All
-                  </button>
-                  <button 
-                    onClick={() => setShowRecipeModal(true)}
-                    className="bg-hytale-purple/10 hover:bg-hytale-purple/20 border border-hytale-purple/30 text-hytale-purple py-2 rounded-md text-xs transition-colors font-black uppercase tracking-widest"
-                  >
-                      Registry
-                  </button>
+              <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => setNested(["Components", "Player", "PlayerData", "KnownRecipes"], [...new Set([...knownRecipes, ...dynamicItems])])} className="bg-[#252525] hover:bg-[#333] border border-gray-700 text-gray-300 py-2 rounded text-xs">Unlock All</button>
+                  <button onClick={() => setShowRecipeModal(true)} className="bg-hytale-purple/10 hover:bg-hytale-purple/20 border border-hytale-purple/30 text-hytale-purple py-2 rounded text-xs font-bold">Open Registry</button>
               </div>
             </div>
-
             <div className="bg-[#1e1e1e] p-4 rounded-lg border border-gray-800">
-              <div className="flex justify-between items-center mb-2">
-                <span className="text-gray-300 font-medium text-sm font-sans">Active Objectives</span>
-                <span className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-1 rounded-full font-black uppercase tracking-widest">
-                  {getNested(data, ["Components", "Player", "PlayerData", "ActiveObjectiveUUIDs"])?.length || 0} Active
-                </span>
+              <div className="flex justify-between items-center mb-4">
+                <span className="text-gray-300 font-medium text-sm">Bestiary</span>
+                <span className="text-xs bg-purple-500/20 text-purple-400 px-2 py-1 rounded-full font-black">{knownMemories.length} Collected</span>
               </div>
-              <button onClick={() => {
-                  setNested(["Components", "Player", "PlayerData", "ActiveObjectiveUUIDs"], []);
-                  setNested(["Components", "ObjectiveHistory"], {});
-                  onShowSuccess("Cleared all quests and history!");
-              }} className="w-full mt-2 flex items-center justify-center gap-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 py-2 rounded-md text-xs transition-colors font-sans uppercase font-bold tracking-wider">
-                  <Trash2 size={14} /> Clear Quests & History
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => setNested(["Components", "PlayerMemories", "Memories"], [...dynamicMemories])} className="bg-[#252525] hover:bg-[#333] border border-gray-700 text-gray-300 py-2 rounded text-xs">Unlock All</button>
+                  <button onClick={() => setShowMemoryModal(true)} className="bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 text-purple-400 py-2 rounded text-xs font-bold">Open Bestiary</button>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Skills & Reputation */}
-        <div className="bg-hytale-panel p-6 rounded-xl border border-gray-800 shadow-sm">
-          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2 font-sans"><Shield size={20} className="text-yellow-400"/> Skills & Reputation</h3>
-          
-          <div className="space-y-6">
+        <div className="bg-hytale-panel p-6 rounded-xl border border-gray-800 lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em] mb-3">Skill Levels</h4>
-              {skillsPath && Object.keys(skillsObj).length > 0 ? (
+                <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-3">Skills</h4>
                 <div className="space-y-2 max-h-[150px] overflow-y-auto pr-2 custom-scrollbar">
-                  {Object.entries(skillsObj).map(([k, v]: [string, any]) => {
-                    if (typeof v !== 'object') return null;
-                    const subKey = ["Level", "Value", "Current", "Experience", "Exp"].find(sk => v[sk] !== undefined);
-                    if (!subKey) return null;
-
-                    return (
-                      <div key={k} className="flex items-center justify-between gap-4 bg-[#1e1e1e] p-2 rounded-md border border-gray-800/50">
-                        <span className="text-[11px] font-bold text-gray-400 truncate uppercase tracking-tighter" title={k}>{k}</span>
-                        <input 
-                          type="number" 
-                          value={v[subKey]} 
-                          onChange={(e) => setNested([...skillsPath, k, subKey], parseFloat(e.target.value))}
-                          className="w-20 bg-[#121212] border border-gray-700 rounded px-2 py-1 text-xs text-right text-white focus:outline-none focus:border-hytale-purple font-mono"
-                        />
-                      </div>
-                    );
-                  })}
+                    {Object.entries(skillsObj).map(([k, v]: [string, any]) => {
+                        const subKey = ["Level", "Value", "Current", "Experience", "Exp"].find(sk => v?.[sk] !== undefined);
+                        if (!subKey) return null;
+                        return (
+                            <div key={k} className="flex items-center justify-between p-2 bg-[#1e1e1e] rounded border border-gray-800">
+                                <span className="text-[10px] text-gray-400 uppercase font-bold">{k}</span>
+                                <input type="number" value={v[subKey]} onChange={(e) => setNested([...skillsPath!, k, subKey], parseFloat(e.target.value))} className="w-16 bg-[#121212] border border-gray-700 rounded px-2 py-0.5 text-xs text-white text-right" />
+                            </div>
+                        );
+                    })}
                 </div>
-              ) : (
-                <p className="text-xs text-gray-500 italic">No skills component found.</p>
-              )}
             </div>
-
             <div>
-              <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em] mb-3">Faction Reputation</h4>
-              {Object.keys(reputation).length > 0 ? (
+                <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-3">Factions</h4>
                 <div className="space-y-2 max-h-[150px] overflow-y-auto pr-2 custom-scrollbar">
-                  {Object.entries(reputation).map(([faction, val]: [string, any]) => (
-                    <div key={faction} className="flex items-center justify-between gap-4 bg-[#1e1e1e] p-2 rounded-md border border-gray-800/50">
-                      <span className="text-[11px] font-bold text-gray-400 truncate uppercase tracking-tighter">{faction}</span>
-                      <input 
-                        type="number" 
-                        value={val} 
-                        onChange={(e) => setNested([...repPath, faction], parseFloat(e.target.value))}
-                        className="w-20 bg-[#121212] border border-gray-700 rounded px-2 py-1 text-xs text-right text-white focus:outline-none focus:border-hytale-purple font-mono"
-                      />
-                    </div>
-                  ))}
+                    {Object.entries(reputation).map(([f, val]: [string, any]) => (
+                        <div key={f} className="flex items-center justify-between p-2 bg-[#1e1e1e] rounded border border-gray-800">
+                            <span className="text-[10px] text-gray-400 uppercase font-bold">{f}</span>
+                            <input type="number" value={val} onChange={(e) => setNested(["Components", "Player", "PlayerData", "ReputationData", f], parseFloat(e.target.value))} className="w-16 bg-[#121212] border border-gray-700 rounded px-2 py-0.5 text-xs text-white text-right" />
+                        </div>
+                    ))}
                 </div>
-              ) : (
-                <p className="text-xs text-gray-500 italic">No reputation data found.</p>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Memories Unlocker Section */}
-        <div className="bg-hytale-panel p-6 rounded-xl border border-gray-800 shadow-sm lg:col-span-1">
-          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2 font-sans"><Brain size={20} className="text-purple-400"/> Memories Unlocker</h3>
-          <div className="bg-[#1e1e1e] p-4 rounded-lg border border-gray-800">
-              <div className="flex justify-between items-center mb-2">
-                <span className="text-gray-300 font-medium text-sm font-sans">Discovery Progress</span>
-                <span className="text-xs bg-purple-500/20 text-purple-400 px-2 py-1 rounded-full font-black uppercase tracking-widest">
-                  {knownMemories.length} / {dynamicMemories.length || '---'}
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-2 mt-2">
-                  <button onClick={() => {
-                      const existing = getNested(data, ["Components", "PlayerMemories", "Memories"]) || [];
-                      setNested(["Components", "PlayerMemories", "Memories"], [...new Set([...existing, ...dynamicMemories])]);
-                      onShowSuccess(`Unlocked all ${dynamicMemories.length} memories!`);
-                  }} className="bg-[#252525] hover:bg-[#333] border border-gray-700 text-gray-300 py-2 rounded-md text-xs transition-colors font-sans uppercase font-bold tracking-wider">
-                      Unlock All
-                  </button>
-                  <button 
-                    onClick={() => setShowMemoryModal(true)}
-                    className="bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 text-purple-400 py-2 rounded-md text-xs transition-colors font-black uppercase tracking-widest"
-                  >
-                      Bestiary
-                  </button>
-              </div>
             </div>
         </div>
-
-        {/* Advanced Mod Components */}
-        <div className="bg-hytale-panel p-6 rounded-xl border border-gray-800 shadow-sm lg:col-span-1">
-          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2 font-sans"><Code size={20} className="text-gray-400"/> System Components</h3>
-          
-          <div className="space-y-2 max-h-[150px] overflow-y-auto pr-2 custom-scrollbar">
-            {modComponents.map(comp => (
-              <div key={comp} className="flex items-center justify-between p-2 bg-[#1e1e1e] rounded-lg border border-gray-800/50 hover:border-hytale-purple/50 transition-colors">
-                <div className="truncate pr-4">
-                  <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-tighter">{comp}</h4>
-                </div>
-                <button 
-                  onClick={() => startEditingRaw(comp)}
-                  className="px-2 py-1 bg-gray-800 hover:bg-hytale-purple hover:text-white text-gray-300 text-[9px] rounded transition-all uppercase font-black tracking-widest"
-                >
-                  Raw Edit
-                </button>
-              </div>
-            ))}
-            {modComponents.length === 0 && <p className="text-xs text-gray-500 italic">No custom/mod components found.</p>}
-          </div>
-        </div>
-
       </div>
 
-      {/* Raw JSON Editor Modal */}
-      {editingRaw && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-6">
-          <div className="bg-hytale-panel border border-gray-800 rounded-xl w-full max-w-2xl flex flex-col h-[80vh] shadow-2xl overflow-hidden">
-            <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-[#1a1a1a] rounded-t-xl">
-              <h3 className="text-white font-medium flex items-center gap-2 font-sans"><Code size={18} className="text-hytale-purple"/> System Registry: {editingRaw}</h3>
-              <button onClick={() => setEditingRaw(null)} className="text-gray-500 hover:text-white">✕</button>
-            </div>
-            <textarea 
-              value={rawText}
-              onChange={e => setRawText(e.target.value)}
-              className="flex-1 bg-[#121212] text-green-400 font-mono text-xs p-4 focus:outline-none resize-none custom-scrollbar"
-              spellCheck={false}
-            />
-            <div className="p-4 border-t border-gray-800 bg-[#1a1a1a] flex justify-end gap-3 rounded-b-xl">
-              <button onClick={() => setEditingRaw(null)} className="px-4 py-2 text-gray-400 hover:text-white text-xs font-bold uppercase tracking-widest">Cancel</button>
-              <button onClick={saveRawComponent} className="px-6 py-2 bg-hytale-purple hover:bg-purple-500 text-white rounded-lg shadow-lg shadow-purple-500/20 text-xs font-black uppercase tracking-widest">Commit Changes</button>
-            </div>
+      {/* Registry Modal */}
+      {showRecipeModal && (
+          <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-6">
+              <div className="bg-hytale-panel border border-gray-800 rounded-2xl w-full max-w-5xl h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+                  <div className="p-6 border-b border-gray-800 flex justify-between items-center bg-[#1a1a1a]">
+                      <h3 className="text-white text-xl font-black uppercase tracking-tight">Global Item Registry</h3>
+                      <button onClick={() => setShowRecipeModal(false)} className="text-gray-500 hover:text-white">✕ Close</button>
+                  </div>
+                  <div className="p-4 bg-black/20"><input type="text" placeholder="Search item registry..." value={recipeSearch} onChange={e => setRecipeSearch(e.target.value)} className="w-full bg-[#121212] border border-gray-800 rounded-xl py-3 px-4 text-white outline-none focus:border-hytale-purple transition-all font-mono" /></div>
+                  <div className="flex-1 overflow-y-auto p-6 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 custom-scrollbar bg-[#111]">
+                      {dynamicItems.filter(id => id.toLowerCase().includes(recipeSearch.toLowerCase())).map(id => {
+                          const active = isRecipeUnlocked(id);
+                          return (
+                              <button key={id} onClick={() => toggleRecipe(id)} className={`flex items-center justify-between p-3 rounded-xl border transition-all ${active ? 'bg-hytale-purple/20 border-hytale-purple/50 text-white' : 'bg-[#1e1e1e] border-gray-800 text-gray-500 hover:border-gray-700'}`}>
+                                  <span className="text-[10px] font-bold uppercase truncate pr-2">{getDisplayName(id, 'item')}</span>
+                                  {active ? <CheckCircle2 size={14} className="text-hytale-purple" /> : <Circle size={14} className="opacity-10" />}
+                              </button>
+                          );
+                      })}
+                  </div>
+              </div>
           </div>
+      )}
+
+      {/* Bestiary Modal */}
+      {showMemoryModal && (
+          <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-6">
+              <div className="bg-hytale-panel border border-gray-800 rounded-2xl w-full max-w-4xl h-[80vh] flex flex-col shadow-2xl overflow-hidden">
+                  <div className="p-6 border-b border-gray-800 flex justify-between items-center bg-[#1a1a1a]">
+                      <h3 className="text-white text-xl font-black uppercase tracking-tight">Bestiary (Memories)</h3>
+                      <button onClick={() => setShowMemoryModal(false)} className="text-gray-500 hover:text-white">✕ Close</button>
+                  </div>
+                  <div className="p-4 bg-black/20"><input type="text" placeholder="Search Bestiary..." value={memorySearch} onChange={e => setMemorySearch(e.target.value)} className="w-full bg-[#121212] border border-gray-800 rounded-xl py-3 px-4 text-white outline-none focus:border-purple-500 transition-all font-mono" /></div>
+                  <div className="flex-1 overflow-y-auto p-6 grid grid-cols-2 md:grid-cols-3 gap-2 custom-scrollbar bg-[#111]">
+                      {dynamicMemories.filter(id => id.toLowerCase().includes(memorySearch.toLowerCase())).map(id => {
+                          const active = isMemoryUnlocked(id);
+                          return (
+                              <button key={id} onClick={() => toggleMemory(id)} className={`flex items-center justify-between p-4 rounded-xl border transition-all ${active ? 'bg-purple-500/20 border-purple-500/50 text-white' : 'bg-[#1e1e1e] border-gray-800 text-gray-500 hover:border-gray-700'}`}>
+                                  <span className="text-[11px] font-bold uppercase truncate pr-2">{getDisplayName(id, 'npc')}</span>
+                                  {active ? <CheckCircle2 size={14} className="text-purple-400" /> : <Circle size={14} className="opacity-10" />}
+                              </button>
+                          );
+                      })}
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* Raw JSON Modal */}
+      {editingRaw && (
+        <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-8">
+            <div className="bg-hytale-panel border border-gray-800 rounded-2xl w-full max-w-2xl h-[70vh] flex flex-col overflow-hidden">
+                <div className="p-4 border-b border-gray-800 bg-[#1a1a1a] flex justify-between items-center">
+                    <span className="text-xs font-black uppercase text-gray-500">Registry Edit: {editingRaw}</span>
+                    <button onClick={() => setEditingRaw(null)}>✕</button>
+                </div>
+                <textarea value={rawText} onChange={e => setRawText(e.target.value)} className="flex-1 bg-black text-green-500 font-mono text-xs p-6 outline-none" spellCheck={false} />
+                <div className="p-4 border-t border-gray-800 bg-[#1a1a1a] flex justify-end"><button onClick={saveRawComponent} className="bg-hytale-purple text-white px-6 py-2 rounded-lg text-xs font-black uppercase">Commit</button></div>
+            </div>
         </div>
       )}
-
-      {/* Recipe Unlocker Modal */}
-      {showRecipeModal && (
-          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-6">
-              <div className="bg-hytale-panel border border-gray-800 rounded-xl w-full max-w-4xl flex flex-col h-[85vh] shadow-2xl overflow-hidden">
-                  <div className="p-6 border-b border-gray-800 bg-[#1a1a1a] flex justify-between items-center">
-                    <div>
-                        <h3 className="text-white text-xl font-bold flex items-center gap-2 font-sans"><BookOpen size={22} className="text-hytale-purple"/> Global Recipe Registry</h3>
-                        <p className="text-xs text-gray-500 mt-1 uppercase tracking-widest font-black opacity-60">{knownRecipes.length} records active in player state</p>
-                    </div>
-                    <button onClick={() => setShowRecipeModal(false)} className="text-gray-500 hover:text-white text-2xl">✕</button>
-                  </div>
-                  
-                  <div className="p-4 bg-[#121212] border-b border-gray-800">
-                    <div className="relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-600" size={18} />
-                        <input 
-                            type="text" 
-                            placeholder="Filter registry by ID..."
-                            value={recipeSearch}
-                            onChange={e => setRecipeSearch(e.target.value)}
-                            className="w-full bg-black/40 border border-gray-800 rounded-xl py-3 pl-10 pr-4 text-white focus:outline-none focus:border-hytale-purple transition-all font-mono text-sm"
-                        />
-                    </div>
-                  </div>
-
-                  <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 bg-[#161616] custom-scrollbar">
-                    {(dynamicItems.length > 0 ? dynamicItems : []).filter(r => r.toLowerCase().includes(recipeSearch.toLowerCase())).map(recipeId => {
-                        const isUnlocked = knownRecipes.includes(recipeId);
-                        return (
-                            <button 
-                                key={recipeId}
-                                onClick={() => toggleRecipe(recipeId)}
-                                className={`flex items-center justify-between p-3 rounded-xl border transition-all active:scale-95 ${
-                                    isUnlocked 
-                                    ? 'bg-hytale-purple/10 border-hytale-purple/40 text-white' 
-                                    : 'bg-[#1e1e1e] border-gray-800 text-gray-600 hover:border-gray-700 hover:text-gray-400'
-                                }`}
-                            >
-                                <span className={`text-[10px] font-bold font-mono truncate mr-2 ${isUnlocked ? 'text-hytale-purple' : ''}`}>{recipeId.replace('hytale:', '').replace(/_/g, ' ')}</span>
-                                {isUnlocked ? <CheckCircle2 size={14} className="text-hytale-purple shrink-0 shadow-lg shadow-purple-500/20" /> : <Circle size={14} className="shrink-0 opacity-10" />}
-                            </button>
-                        );
-                    })}
-                  </div>
-
-                  <div className="p-4 border-t border-gray-800 bg-[#1a1a1a] flex justify-between items-center shrink-0">
-                    <div className="flex gap-2">
-                        <button 
-                            onClick={() => {
-                                setNested(["Components", "Player", "PlayerData", "KnownRecipes"], [...new Set([...knownRecipes, ...dynamicItems])]);
-                            }}
-                            className="px-4 py-2 bg-hytale-purple/20 text-hytale-purple border border-hytale-purple/30 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-hytale-purple hover:text-white transition-all"
-                        >
-                            Sync All
-                        </button>
-                        <button 
-                            onClick={() => {
-                                setNested(["Components", "Player", "PlayerData", "KnownRecipes"], []);
-                            }}
-                            className="px-4 py-2 bg-red-500/10 text-red-500 border border-red-500/20 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-red-500 hover:text-white transition-all"
-                        >
-                            Wipe All
-                        </button>
-                    </div>
-                    <button 
-                        onClick={() => setShowRecipeModal(false)}
-                        className="px-8 py-2 bg-hytale-purple text-white rounded-lg text-[10px] font-black uppercase tracking-[0.2em] transition-all hover:bg-purple-500 shadow-lg shadow-purple-500/20"
-                    >
-                        Confirm Sync
-                    </button>
-                  </div>
-              </div>
-          </div>
-      )}
-
-      {/* Memory Unlocker Modal */}
-      {showMemoryModal && (
-          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-6">
-              <div className="bg-hytale-panel border border-gray-800 rounded-xl w-full max-w-3xl flex flex-col h-[80vh] shadow-2xl overflow-hidden">
-                  <div className="p-6 border-b border-gray-800 bg-[#1a1a1a] flex justify-between items-center">
-                    <div>
-                        <h3 className="text-white text-xl font-bold flex items-center gap-2 font-sans"><Brain size={22} className="text-purple-400"/> Echoes of Orbis: Bestiary</h3>
-                        <p className="text-xs text-gray-500 mt-1 uppercase tracking-widest font-black opacity-60">{knownMemories.length} / {dynamicMemories.length || '---'} creatures cataloged</p>
-                    </div>
-                    <button onClick={() => setShowMemoryModal(false)} className="text-gray-500 hover:text-white text-2xl">✕</button>
-                  </div>
-                  
-                  <div className="p-4 bg-[#121212] border-b border-gray-800">
-                    <div className="relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-600" size={18} />
-                        <input 
-                            type="text" 
-                            placeholder="Filter Bestiary by creature..."
-                            value={memorySearch}
-                            onChange={e => setMemorySearch(e.target.value)}
-                            className="w-full bg-black/40 border border-gray-800 rounded-xl py-3 pl-10 pr-4 text-white focus:outline-none focus:border-purple-500 transition-all font-mono text-sm"
-                        />
-                    </div>
-                  </div>
-
-                  <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 md:grid-cols-2 gap-2 bg-[#161616] custom-scrollbar">
-                    {(dynamicMemories.length > 0 ? dynamicMemories : []).filter(m => m.toLowerCase().includes(memorySearch.toLowerCase())).map(memoryId => {
-                        const isUnlocked = knownMemories.some((m: any) => m === memoryId || m.id === memoryId);
-                        return (
-                            <button 
-                                key={memoryId}
-                                onClick={() => toggleMemory(memoryId)}
-                                className={`flex items-center justify-between p-4 rounded-xl border transition-all active:scale-95 ${
-                                    isUnlocked 
-                                    ? 'bg-purple-500/10 border-purple-500/40 text-white' 
-                                    : 'bg-[#1e1e1e] border-gray-800 text-gray-600 hover:border-gray-700 hover:text-gray-400'
-                                }`}
-                            >
-                                <span className={`text-xs font-black font-mono truncate mr-2 uppercase tracking-tighter ${isUnlocked ? 'text-purple-400' : ''}`}>{memoryId.replace('hytale:', '').replace(/_/g, ' ')}</span>
-                                {isUnlocked ? <CheckCircle2 size={16} className="text-purple-400 shrink-0 shadow-lg shadow-purple-500/20" /> : <Circle size={16} className="shrink-0 opacity-10" />}
-                            </button>
-                        );
-                    })}
-                  </div>
-
-                  <div className="p-4 border-t border-gray-800 bg-[#1a1a1a] flex justify-between items-center shrink-0">
-                    <div className="flex gap-2">
-                        <button 
-                            onClick={() => {
-                                setNested(["Components", "PlayerMemories", "Memories"], [...dynamicMemories]);
-                            }}
-                            className="px-4 py-2 bg-purple-500/20 text-purple-400 border border-purple-500/30 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-purple-500 hover:text-white transition-all"
-                        >
-                            Log All
-                        </button>
-                        <button 
-                            onClick={() => {
-                                setNested(["Components", "PlayerMemories", "Memories"], []);
-                            }}
-                            className="px-4 py-2 bg-red-500/10 text-red-500 border border-red-500/20 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-red-500 hover:text-white transition-all"
-                        >
-                            Wipe Bestiary
-                        </button>
-                    </div>
-                    <button 
-                        onClick={() => setShowMemoryModal(false)}
-                        className="px-8 py-2 bg-purple-600 text-white rounded-lg text-[10px] font-black uppercase tracking-[0.2em] transition-all hover:bg-purple-500 shadow-lg shadow-purple-500/20"
-                    >
-                        Save Bestiary
-                    </button>
-                  </div>
-              </div>
-          </div>
-      )}
-
     </div>
   );
 }

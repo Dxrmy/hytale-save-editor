@@ -2,6 +2,8 @@ import os
 import json
 import shutil
 import struct
+import argparse
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Final, List, Optional, Any
@@ -29,12 +31,18 @@ SAVE_BASE_PATH: Final[Path] = Path(os.path.expandvars(r"%APPDATA%\Hytale\UserDat
 BACKUP_DIR_NAME: Final[str] = "HSE_Backups"
 
 
+def json_output(data: Any) -> None:
+    """Prints data as JSON for headless mode."""
+    print(json.dumps(data, indent=2))
+
+
 def validate_environment() -> bool:
     """
     Validates the local Hytale save environment.
     """
     if not SAVE_BASE_PATH.exists():
-        print(f"Environment Error: Hytale save directory not found at {SAVE_BASE_PATH}")
+        if "--headless" not in sys.argv:
+            print(f"Environment Error: Hytale save directory not found at {SAVE_BASE_PATH}")
         return False
     return True
 
@@ -729,9 +737,9 @@ def safe_chunk_reset(save_path: Path) -> None:
         print("Safe chunk reset complete.")
 
 
-def scan_region_for_chests_logic(file_path: Path) -> List[dict]:
+def scan_region_for_chests_logic(file_path: Path, headless: bool = False) -> List[dict]:
     if not (zstd and bson):
-        print("Error: zstandard and pymongo (bson) are required for region scanning.")
+        if not headless: print("Error: zstandard and pymongo (bson) are required for region scanning.")
         return []
 
     chests = []
@@ -771,23 +779,45 @@ def scan_region_for_chests_logic(file_path: Path) -> List[dict]:
                     
                     for pos, data in bc.items():
                         if isinstance(data, dict):
+                            # Try to extract multiple things
                             inv = data.get("Components", {}).get("StorageInventory", {})
+                            spawner = data.get("Components", {}).get("Spawner", {})
+                            sign = data.get("Components", {}).get("Sign", {})
+                            
+                            chunk_x = i % 32
+                            chunk_z = i // 32
+                            
                             if inv:
-                                chunk_x = i % 32
-                                chunk_z = i // 32
                                 chests.append({
+                                    "type": "Chest",
                                     "pos_index": pos,
                                     "chunk": (chunk_x, chunk_z),
                                     "inventory": inv,
                                     "sector": sector,
-                                    "uncomp_len": uncomp_len,
-                                    "comp_len": comp_len,
-                                    "full_data": decoded # We keep this for editing
+                                    "full_data": decoded
+                                })
+                            elif spawner:
+                                chests.append({
+                                    "type": "Spawner",
+                                    "pos_index": pos,
+                                    "chunk": (chunk_x, chunk_z),
+                                    "spawner": spawner,
+                                    "sector": sector,
+                                    "full_data": decoded
+                                })
+                            elif sign:
+                                chests.append({
+                                    "type": "Sign",
+                                    "pos_index": pos,
+                                    "chunk": (chunk_x, chunk_z),
+                                    "sign": sign,
+                                    "sector": sector,
+                                    "full_data": decoded
                                 })
                 except Exception:
                     continue
     except Exception as e:
-        print(f"Error scanning region: {e}")
+        if not headless: print(f"Error scanning region: {e}")
                 
     return chests
 
@@ -1199,8 +1229,272 @@ def main():
                             edit_mod_components(p_path)
 
 
+def headless_main(args):
+    if args.command == "list-saves":
+        saves = get_saves()
+        json_output([{"name": s.name, "path": str(s)} for s in saves])
+    
+    elif args.command == "list-players":
+        save_path = SAVE_BASE_PATH / args.save
+        players = get_players(save_path)
+        json_output([{"name": p.name, "path": str(p)} for p in players])
+        
+    elif args.command == "get-player":
+        player_path = Path(args.path)
+        if player_path.exists():
+            with open(player_path, "r") as f:
+                json_output(json.load(f))
+        else:
+            json_output({"error": "Player not found"})
+
+    elif args.command == "update-player":
+        player_path = Path(args.path)
+        try:
+            data = json.loads(args.data)
+            with open(player_path, "w") as f:
+                json.dump(data, f, indent=4)
+            json_output({"success": True})
+        except Exception as e:
+            json_output({"error": str(e)})
+
+    elif args.command == "list-regions":
+        save_path = SAVE_BASE_PATH / args.save
+        chunks_dir = save_path / "universe" / "worlds" / "default" / "chunks"
+        if not chunks_dir.exists():
+            json_output([])
+            return
+        region_files = list(chunks_dir.glob("*.region.bin"))
+        json_output([f.name for f in region_files])
+
+    elif args.command == "scan-region":
+        save_path = SAVE_BASE_PATH / args.save
+        file_path = save_path / "universe" / "worlds" / "default" / "chunks" / args.region
+        if not file_path.exists():
+            json_output({"error": "Region file not found"})
+            return
+        
+        chests = scan_region_for_chests_logic(file_path, headless=True)
+        
+        # Remove 'full_data' to avoid JSON serialization errors with raw bytes
+        for c in chests:
+            if "full_data" in c:
+                del c["full_data"]
+                
+        print(json.dumps(chests, default=str))
+
+    elif args.command == "scan-all-regions":
+        save_path = SAVE_BASE_PATH / args.save
+        chunks_dir = save_path / "universe" / "worlds" / "default" / "chunks"
+        if not chunks_dir.exists():
+            json_output([])
+            return
+        
+        all_results = []
+        for file_path in chunks_dir.glob("*.region.bin"):
+            chests = scan_region_for_chests_logic(file_path, headless=True)
+            for c in chests:
+                if "full_data" in c:
+                    del c["full_data"]
+                c["region_file"] = file_path.name
+                all_results.append(c)
+                
+        print(json.dumps(all_results, default=str))
+
+    elif args.command == "hard-reset":
+        save_path = SAVE_BASE_PATH / args.save
+        if not save_path.exists():
+            json_output({"error": "Save not found"})
+            return
+            
+        # Mandatory Backup
+        create_backup(save_path)
+        
+        # 1. Update config.json
+        conf_path = save_path / "universe" / "worlds" / "default" / "config.json"
+        if conf_path.exists():
+            with open(conf_path, "r") as f:
+                data = json.load(f)
+            data["Seed"] = int(args.seed)
+            with open(conf_path, "w") as f:
+                json.dump(data, f, indent=4)
+
+        # 2. Delete chunk files
+        chunks_dir = save_path / "universe" / "worlds" / "default" / "chunks"
+        if chunks_dir.exists():
+            for chunk_file in chunks_dir.glob("*"):
+                if chunk_file.is_file():
+                    try: chunk_file.unlink()
+                    except: pass
+
+        # 3. Reset Time.json
+        time_path = save_path / "universe" / "worlds" / "default" / "resources" / "Time.json"
+        if time_path.exists():
+            with open(time_path, "w") as f:
+                json.dump({"Now": "1970-01-01T06:00:00.000Z"}, f, indent=4)
+
+        # 4. Reset BlockMapMarkers.json
+        marker_path = save_path / "universe" / "worlds" / "default" / "resources" / "BlockMapMarkers.json"
+        if marker_path.exists():
+            with open(marker_path, "w") as f:
+                json.dump({"Markers": []}, f, indent=4)
+
+        # 5. Wipe player data
+        players = get_players(save_path)
+        for p_path in players:
+            try:
+                with open(p_path, "r") as f: p_data = json.load(f)
+                set_nested(p_data, ["Components", "Transform", "Position"], {"X": 0.0, "Y": 100.0, "Z": 0.0})
+                for inv_key in ["HotbarInventory", "StorageInventory", "BackpackInventory", "ArmorInventory", "UtilityInventory"]:
+                    if inv_key in p_data.get("Components", {}):
+                        p_data["Components"][inv_key]["Inventory"]["Items"] = {}
+                if "ReputationData" in p_data.get("Components", {}).get("Player", {}).get("PlayerData", {}):
+                     p_data["Components"]["Player"]["PlayerData"]["ReputationData"] = {}
+                if "ActiveObjectiveUUIDs" in p_data.get("Components", {}).get("Player", {}).get("PlayerData", {}):
+                     p_data["Components"]["Player"]["PlayerData"]["ActiveObjectiveUUIDs"] = []
+                with open(p_path, "w") as f: json.dump(p_data, f, indent=4)
+            except: pass
+            
+        json_output({"success": True})
+
+    elif args.command == "rename-save":
+        save_path = SAVE_BASE_PATH / args.save
+        new_path = SAVE_BASE_PATH / args.newname
+        if new_path.exists():
+            json_output({"error": "Folder name already exists"})
+            return
+            
+        try:
+            conf_path = save_path / "universe" / "worlds" / "default" / "config.json"
+            if conf_path.exists():
+                with open(conf_path, "r") as f: data = json.load(f)
+                data["DisplayName"] = args.newname
+                with open(conf_path, "w") as f: json.dump(data, f, indent=4)
+            os.rename(save_path, new_path)
+            json_output({"success": True, "new_path": str(new_path)})
+        except Exception as e:
+            json_output({"error": str(e)})
+
+    elif args.command == "safe-chunk-reset":
+        save_path = SAVE_BASE_PATH / args.save
+        chunks_dir = save_path / "universe" / "worlds" / "default" / "chunks"
+        if not chunks_dir.exists():
+            json_output({"error": "Chunks dir not found"})
+            return
+        try:
+            target_file = chunks_dir / args.chunkfile
+            if target_file.exists(): target_file.unlink()
+            json_output({"success": True})
+        except Exception as e:
+            json_output({"error": str(e)})
+
+    elif args.command == "list-waypoints":
+        save_path = SAVE_BASE_PATH / args.save
+        marker_path = save_path / "universe" / "worlds" / "default" / "resources" / "BlockMapMarkers.json"
+        if not marker_path.exists():
+            json_output([])
+            return
+        try:
+            with open(marker_path, "r") as f: marker_data = json.load(f)
+            markers_raw = marker_data.get("Markers", [])
+            markers = list(markers_raw.values()) if isinstance(markers_raw, dict) else markers_raw
+            json_output(markers)
+        except Exception as e:
+            json_output({"error": str(e)})
+
+    elif args.command == "teleport-player":
+        save_path = SAVE_BASE_PATH / args.save
+        player_path = Path(args.path)
+        marker_path = save_path / "universe" / "worlds" / "default" / "resources" / "BlockMapMarkers.json"
+        
+        try:
+            with open(marker_path, "r") as f: marker_data = json.load(f)
+            with open(player_path, "r") as f: player_data = json.load(f)
+            
+            markers_raw = marker_data.get("Markers", [])
+            markers = list(markers_raw.values()) if isinstance(markers_raw, dict) else markers_raw
+            
+            target_marker = next((m for m in markers if m.get("Name") == args.waypoint), None)
+            if not target_marker:
+                json_output({"error": "Waypoint not found"})
+                return
+                
+            pos = target_marker.get("Position", {})
+            new_pos = {"X": float(pos.get("X", 0)), "Y": float(pos.get("Y", 0)) + 2.0, "Z": float(pos.get("Z", 0))}
+            
+            set_nested(player_data, ["Components", "Transform", "Position"], new_pos)
+            set_nested(player_data, ["Components", "Player", "PlayerData", "PerWorldData", "default", "LastPosition"], new_pos)
+            
+            with open(player_path, "w") as f: json.dump(player_data, f, indent=4)
+            json_output({"success": True, "new_pos": new_pos})
+        except Exception as e:
+            json_output({"error": str(e)})
+
+
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\nExiting...")
+    parser = argparse.ArgumentParser(description="Hytale Save Editor (HSE)")
+    parser.add_argument("--headless", action="store_true", help="Run in headless mode for GUI integration")
+    subparsers = parser.add_subparsers(dest="command")
+
+    # List Saves
+    subparsers.add_parser("list-saves")
+
+    # List Players
+    list_p = subparsers.add_parser("list-players")
+    list_p.add_argument("--save", required=True, help="Save folder name")
+
+    # Get Player Data (Generic JSON read)
+    get_p = subparsers.add_parser("get-player")
+    get_p.add_argument("--path", required=True, help="Full path to JSON file")
+
+    # Update Player Data (Generic JSON write)
+    upd_p = subparsers.add_parser("update-player")
+    upd_p.add_argument("--path", required=True, help="Full path to JSON file")
+    upd_p.add_argument("--data", required=True, help="JSON string of new data")
+
+    # List Regions
+    list_r = subparsers.add_parser("list-regions")
+    list_r.add_argument("--save", required=True, help="Save folder name")
+
+    # Scan Region
+    scan_r = subparsers.add_parser("scan-region")
+    scan_r.add_argument("--save", required=True, help="Save folder name")
+    scan_r.add_argument("--region", required=True, help="Region filename")
+
+    # Hard Reset
+    hr_r = subparsers.add_parser("hard-reset")
+    hr_r.add_argument("--save", required=True, help="Save folder name")
+    hr_r.add_argument("--seed", required=True, help="New Seed")
+
+    # Rename Save
+    ren_r = subparsers.add_parser("rename-save")
+    ren_r.add_argument("--save", required=True, help="Current Save folder name")
+    ren_r.add_argument("--newname", required=True, help="New Name")
+
+    # Safe Chunk Reset
+    scr_r = subparsers.add_parser("safe-chunk-reset")
+    scr_r.add_argument("--save", required=True, help="Save folder name")
+    scr_r.add_argument("--chunkfile", required=True, help="Chunk file to delete")
+
+    # List Waypoints
+    lw_r = subparsers.add_parser("list-waypoints")
+    lw_r.add_argument("--save", required=True, help="Save folder name")
+
+    # Teleport Player
+    tp_r = subparsers.add_parser("teleport-player")
+    tp_r.add_argument("--save", required=True, help="Save folder name")
+    tp_r.add_argument("--path", required=True, help="Player JSON path")
+    tp_r.add_argument("--waypoint", required=True, help="Waypoint Name")
+
+    # Scan All Regions
+    sar_r = subparsers.add_parser("scan-all-regions")
+    sar_r.add_argument("--save", required=True, help="Save folder name")
+
+    args = parser.parse_args()
+
+    if args.headless:
+        headless_main(args)
+    else:
+        try:
+            main()
+        except KeyboardInterrupt:
+            print("\nExiting...")

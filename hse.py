@@ -1176,17 +1176,17 @@ def main():
                         edit_world_config(save_path)
                     elif world_choice.startswith("Time"):
                         edit_world_time(save_path)
-                    elif world_choice == "Waypoint Teleport":
+                    elif world_choice.startswith("Waypoint Teleport"):
                         p_path = get_player_path(save_path)
                         if p_path:
                             waypoint_teleport(p_path, save_path)
-                    elif world_choice == "Player Position":
+                    elif world_choice.startswith("Player Position"):
                         p_path = get_player_path(save_path)
                         if p_path:
                             edit_player_position(p_path)
                     elif world_choice.startswith("Hard Reset"):
                         save_path = hard_reset_world(save_path)
-                    elif world_choice == "Rename Save":
+                    elif world_choice.startswith("Rename Save"):
                         save_path = save_renaming(save_path)
             
             elif choice.startswith("Quest, Social & Progression"):
@@ -1429,6 +1429,19 @@ def headless_main(args):
         except Exception as e:
             json_output({"error": str(e)})
 
+    elif args.command == "list-dynamic-assets":
+        try:
+            # Check for script in local folder first
+            import sys
+            script_dir = Path(__file__).parent.absolute()
+            if str(script_dir) not in sys.path:
+                sys.path.append(str(script_dir))
+            
+            from get_dynamic_assets import get_dynamic_data
+            json_output(get_dynamic_data())
+        except Exception as e:
+            json_output({"error": str(e)})
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Hytale Save Editor (HSE)")
@@ -1488,6 +1501,9 @@ if __name__ == "__main__":
     # Scan All Regions
     sar_r = subparsers.add_parser("scan-all-regions")
     sar_r.add_argument("--save", required=True, help="Save folder name")
+
+    # Dynamic Assets
+    subparsers.add_parser("list-dynamic-assets")
 
     args = parser.parse_args()
 

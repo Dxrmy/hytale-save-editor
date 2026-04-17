@@ -1,6 +1,6 @@
 {
   "name": "hytale-save-editor-ui",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Electron GUI for Hytale Save Editor",
   "main": "electron/main.js",
   "scripts": {
@@ -40,6 +40,12 @@
       "dist/**/*",
       "electron/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "electron/hse.py",
+        "to": "hse.py"
+      }
     ],
     "win": {
       "target": [

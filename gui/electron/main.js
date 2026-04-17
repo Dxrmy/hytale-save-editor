@@ -45,12 +45,14 @@ ipcMain.handle('hse-command', async (event, { command, args }) => {
   return new Promise((resolve, reject) => {
     const pythonPath = 'python'; // Assumes python is in PATH
     
-    // Resolve script path: check packaged location first, then dev location
-    let scriptPath = path.join(__dirname, 'hse.py'); // Packaged next to main.js
-    if (!require('fs').existsSync(scriptPath)) {
-        scriptPath = path.join(__dirname, '../../hse.py'); // Dev location
-    }
-    
+    // Resolve script path: 
+    // In production, extraResources land in the 'resources' folder
+    // In dev, we look in the local folder
+    const isPackaged = app.isPackaged;
+    let scriptPath = isPackaged 
+        ? path.join(process.resourcesPath, 'hse.py') 
+        : path.join(__dirname, 'hse.py');
+
     const cmdArgs = ['--headless', command, ...args];
     console.log(`Executing: ${pythonPath} ${scriptPath} ${cmdArgs.join(' ')}`);
     
@@ -67,6 +69,10 @@ ipcMain.handle('hse-command', async (event, { command, args }) => {
       stderr += data.toString();
     });
 
+    pyProcess.on('error', (err) => {
+      resolve({ error: `Failed to spawn Python: ${err.message}. Ensure Python is in your PATH.` });
+    });
+
     pyProcess.on('close', (code) => {
       if (code === 0) {
         try {
@@ -75,7 +81,8 @@ ipcMain.handle('hse-command', async (event, { command, args }) => {
           resolve({ error: 'Failed to parse JSON response', raw: stdout });
         }
       } else {
-        reject({ error: stderr || `Process exited with code ${code}`, code });
+        // We resolve instead of reject to avoid the generic [object Object] error in UI
+        resolve({ error: stderr.trim() || `Python process exited with code ${code}`, code });
       }
     });
   });

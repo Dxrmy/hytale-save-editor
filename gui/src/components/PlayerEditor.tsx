@@ -50,12 +50,16 @@ export default function PlayerEditor({ playerPath, saveName, onShowError, onShow
       try {
           // @ts-ignore
           const res = await window.electronAPI.invokeHSE('list-dynamic-assets', []);
-          if (res && !res.error) {
+          if (res && res.error) {
+              console.error("Dynamic asset error:", res.error);
+              onShowError(`Asset Scan Failed: ${res.error}`);
+          } else if (res) {
               if (res.items) setDynamicItems(res.items);
               if (res.memories) setDynamicMemories(res.memories);
           }
       } catch (e) {
           console.error("Failed to load dynamic assets:", e);
+          onShowError("Failed to communicate with asset scanner.");
       }
   };
 

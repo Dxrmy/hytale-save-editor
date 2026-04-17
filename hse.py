@@ -1389,33 +1389,60 @@ def headless_main(args):
 
     elif args.command == "list-waypoints":
         save_path = SAVE_BASE_PATH / args.save
-        marker_path = save_path / "universe" / "worlds" / "default" / "resources" / "BlockMapMarkers.json"
-        if not marker_path.exists():
-            json_output([])
-            return
-        try:
-            with open(marker_path, "r") as f: marker_data = json.load(f)
-            markers_raw = marker_data.get("Markers", [])
-            markers = list(markers_raw.values()) if isinstance(markers_raw, dict) else markers_raw
-            json_output(markers)
-        except Exception as e:
-            json_output({"error": str(e)})
+        resource_dir = save_path / "universe" / "worlds" / "default" / "resources"
+        
+        all_markers = []
+        
+        # 1. Check BlockMapMarkers.json (Static/Fixed waypoints)
+        block_path = resource_dir / "BlockMapMarkers.json"
+        if block_path.exists():
+            try:
+                with open(block_path, "r") as f: data = json.load(f)
+                raw = data.get("Markers", [])
+                all_markers.extend(list(raw.values()) if isinstance(raw, dict) else raw)
+            except: pass
+            
+        # 2. Check SharedUserMapMarkers.json (Custom player waypoints)
+        user_path = resource_dir / "SharedUserMapMarkers.json"
+        if user_path.exists():
+            try:
+                with open(user_path, "r") as f: data = json.load(f)
+                raw = data.get("Markers", [])
+                all_markers.extend(list(raw.values()) if isinstance(raw, dict) else raw)
+            except: pass
+            
+        # De-duplicate by name
+        unique_markers = []
+        seen = set()
+        for m in all_markers:
+            name = m.get("Name")
+            if name and name not in seen:
+                unique_markers.append(m)
+                seen.add(name)
+                
+        json_output(unique_markers)
 
     elif args.command == "teleport-player":
         save_path = SAVE_BASE_PATH / args.save
         player_path = Path(args.path)
-        marker_path = save_path / "universe" / "worlds" / "default" / "resources" / "BlockMapMarkers.json"
+        resource_dir = save_path / "universe" / "worlds" / "default" / "resources"
         
         try:
-            with open(marker_path, "r") as f: marker_data = json.load(f)
             with open(player_path, "r") as f: player_data = json.load(f)
             
-            markers_raw = marker_data.get("Markers", [])
-            markers = list(markers_raw.values()) if isinstance(markers_raw, dict) else markers_raw
+            # Search in both files for the target waypoint
+            target_marker = None
+            for fname in ["BlockMapMarkers.json", "SharedUserMapMarkers.json"]:
+                mpath = resource_dir / fname
+                if mpath.exists():
+                    with open(mpath, "r") as f: data = json.load(f)
+                    raw = data.get("Markers", [])
+                    markers = list(raw.values()) if isinstance(raw, dict) else raw
+                    target_marker = next((m for m in markers if m.get("Name") == args.waypoint), None)
+                    if target_marker: break
             
-            target_marker = next((m for m in markers if m.get("Name") == args.waypoint), None)
             if not target_marker:
-                json_output({"error": "Waypoint not found"})
+                json_output({"error": "Waypoint not found in any marker file"})
                 return
                 
             pos = target_marker.get("Position", {})
@@ -1431,12 +1458,28 @@ def headless_main(args):
 
     elif args.command == "list-dynamic-assets":
         try:
-            # Check for script in local folder first
             import sys
-            script_dir = Path(__file__).parent.absolute()
-            if str(script_dir) not in sys.path:
-                sys.path.append(str(script_dir))
+            # Check multiple possible locations for the script
+            # 1. Resources folder (packaged app)
+            # 2. Local folder (dev or packaged next to exe)
+            possible_dirs = [
+                Path(sys.executable).parent / "resources",
+                Path(__file__).parent.absolute(),
+                Path(os.getcwd())
+            ]
             
+            script_found = False
+            for d in possible_dirs:
+                if (d / "get_dynamic_assets.py").exists():
+                    if str(d) not in sys.path:
+                        sys.path.append(str(d))
+                    script_found = True
+                    break
+            
+            if not script_found:
+                 json_output({"error": f"get_dynamic_assets.py not found in checked paths: {[str(d) for d in possible_dirs]}"})
+                 return
+
             from get_dynamic_assets import get_dynamic_data
             json_output(get_dynamic_data())
         except Exception as e:

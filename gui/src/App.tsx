@@ -155,7 +155,7 @@ function App() {
               </div>
             </div>
           ) : view === 'world' ? (
-            <div className="p-8 w-full h-full">
+            <div className="p-8 w-full">
               <WorldEditor save={selectedSave} onShowError={setError} onShowSuccess={handleShowSuccess} />
             </div>
           ) : view === 'regions' ? (

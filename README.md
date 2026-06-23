@@ -1,8 +1,6 @@
 # Hytale Save Editor (HSE)
 
-A comprehensive Hytale save file exploration and editing engine.
-
-Hytale Save Editor (HSE) is a robust toolkit designed to interface directly with Hytale's save file architecture. It bridges the gap between raw binary world data and user-friendly visual interfaces. It prioritizes safety through automatic backup infrastructure and provides a powerful engine for deep-level save manipulation.
+A UI and CLI tool to edit Hytale save files without corrupting them.
 
 ## GUI vs CLI
 
